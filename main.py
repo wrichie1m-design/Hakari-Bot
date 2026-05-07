@@ -6,14 +6,14 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
+import os          # ← Moved import os up here with other imports
+from dotenv import load_dotenv
 
 # ==================================================
 # BOT CONFIGURATION
 # ==================================================
 MAIN_OWNER_ID = 1486785358162300969
 COMMAND_PREFIX = "."
-python
-import os
 TOKEN = os.environ["TOKEN"]
 
 intents = discord.Intents.default()
