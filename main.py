@@ -190,16 +190,31 @@ async def get_user_data(user_id: int):
 
 async def add_xp(user_id: int, amount: int):
     async with aiosqlite.connect("hakari.db") as db:
+        # First, ensure user exists
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        
+        # Add XP
         await db.execute("UPDATE users SET xp = xp + ?, total_xp = total_xp + ? WHERE user_id = ?", (amount, amount, user_id))
         await db.commit()
-        # Level up logic (simple: level = floor(sqrt(total_xp/100)))
+        
+        # Get updated values
         async with db.execute("SELECT total_xp, level FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            total_xp, level = await cursor.fetchone()
+            result = await cursor.fetchone()
+            
+        # Handle case where user doesn't exist (shouldn't happen after INSERT OR IGNORE)
+        if result is None:
+            return None
+            
+        total_xp, level = result
+        
+        # Calculate new level
         new_level = int((total_xp / 100) ** 0.5)
+        
         if new_level > level:
             await db.execute("UPDATE users SET level = ? WHERE user_id = ?", (new_level, user_id))
             await db.commit()
             return new_level
+            
     return None
 
 # ==================================================
