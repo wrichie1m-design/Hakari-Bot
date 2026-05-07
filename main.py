@@ -12,7 +12,9 @@ from typing import Optional, Dict, List, Tuple
 # ==================================================
 MAIN_OWNER_ID = 1486785358162300969
 COMMAND_PREFIX = "."
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your bot token
+python
+import os
+TOKEN = os.environ["TOKEN"]
 
 intents = discord.Intents.default()
 intents.message_content = True
