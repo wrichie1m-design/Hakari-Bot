@@ -6,8 +6,7 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
-import os          # ← Moved import os up here with other imports
-from dotenv import load_dotenv
+import os
 
 # ==================================================
 # BOT CONFIGURATION
