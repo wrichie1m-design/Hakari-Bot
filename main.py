@@ -111,6 +111,7 @@ async def init_db():
         """)
         
         await db.commit()
+    print("✅ Database initialized successfully!")
 
 # ==================================================
 # HELPER FUNCTIONS
@@ -1202,114 +1203,4 @@ class LeaderboardCommands(commands.Cog):
 
     @commands.command(name="globalleaderboard", aliases=["glb"])
     async def global_leaderboard(self, ctx, category: str = "money"):
-        if category not in ["money", "xp", "gangs", "families"]:
-            await ctx.send("Valid categories: money, xp, gangs, families")
-            return
-        async with aiosqlite.connect("hakari.db") as db:
-            if category == "money":
-                async with db.execute("SELECT user_id, money+bank as total FROM users ORDER BY total DESC LIMIT 10") as cursor:
-                    rows = await cursor.fetchall()
-                title = "Global Richest Users"
-                value_func = lambda row: f"{row[1]} coins"
-            elif category == "xp":
-                async with db.execute("SELECT user_id, total_xp FROM users ORDER BY total_xp DESC LIMIT 10") as cursor:
-                    rows = await cursor.fetchall()
-                title = "Global Top XP"
-                value_func = lambda row: f"{row[1]} XP (Level {int((row[1]/100)**0.5)})"
-            elif category == "gangs":
-                async with db.execute("SELECT gang, SUM(money+bank) as total FROM users WHERE gang IS NOT NULL GROUP BY gang ORDER BY total DESC LIMIT 10") as cursor:
-                    rows = await cursor.fetchall()
-                title = "Top Gangs by Wealth"
-                value_func = lambda row: f"{row[0]} - {row[1]} coins"
-            else:  # families
-                async with db.execute("SELECT family, SUM(money+bank) as total FROM users WHERE family IS NOT NULL GROUP BY family ORDER BY total DESC LIMIT 10") as cursor:
-                    rows = await cursor.fetchall()
-                title = "Top Families by Wealth"
-                value_func = lambda row: f"{row[0]} - {row[1]} coins"
-        if not rows:
-            await ctx.send("No data available.")
-            return
-        embed = discord.Embed(title=title, color=discord.Color.gold())
-        for idx, row in enumerate(rows, 1):
-            user_id = row[0]
-            if category in ["money", "xp"]:
-                user = await bot.fetch_user(user_id)
-                name = user.display_name if user else str(user_id)
-                embed.add_field(name=f"#{idx} - {name}", value=value_func(row), inline=False)
-            else:
-                embed.add_field(name=f"#{idx}", value=value_func(row), inline=False)
-        await ctx.send(embed=embed)
-
-    @commands.command(name="serverleaderboard", aliases=["slb"])
-    async def server_leaderboard(self, ctx, category: str = "money"):
-        if category not in ["money", "xp"]:
-            await ctx.send("Valid categories: money, xp")
-            return
-        members = ctx.guild.members
-        user_data = []
-        async with aiosqlite.connect("hakari.db") as db:
-            for member in members:
-                if member.bot:
-                    continue
-                async with db.execute("SELECT money, bank, total_xp FROM users WHERE user_id = ?", (member.id,)) as cursor:
-                    row = await cursor.fetchone()
-                if row:
-                    if category == "money":
-                        total = row[0] + row[1]
-                        user_data.append((member, total))
-                    else:
-                        user_data.append((member, row[2]))
-        user_data.sort(key=lambda x: x[1], reverse=True)
-        top = user_data[:10]
-        if not top:
-            await ctx.send("No data available.")
-            return
-        title = f"Server {'Richest' if category=='money' else 'Top XP'} - {ctx.guild.name}"
-        embed = discord.Embed(title=title, color=discord.Color.blue())
-        for idx, (member, value) in enumerate(top, 1):
-            if category == "money":
-                embed.add_field(name=f"#{idx} - {member.display_name}", value=f"{value} coins", inline=False)
-            else:
-                embed.add_field(name=f"#{idx} - {member.display_name}", value=f"{value} XP", inline=False)
-        await ctx.send(embed=embed)
-
-# ==================================================
-# EVENTS
-# ==================================================
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user}")
-    await init_db()
-    # Start passive income task
-    if not passive_income.is_running():
-        passive_income.start()
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    # XP gain
-    xp_gain = random.randint(10, 20)
-    new_level = await add_xp(message.author.id, xp_gain)
-    if new_level:
-        await message.channel.send(f"🎉 {message.author.mention} leveled up to level {new_level}!")
-    await bot.process_commands(message)
-
-# Passive income background task for businesses (hourly)
-@tasks.loop(hours=1)
-async def passive_income():
-    async with aiosqlite.connect("hakari.db") as db:
-        # For businesses, we don't auto-add; users must collect. But we could add auto? Let's just leave as manual collection.
-        # For shops, also manual. No automatic income to prevent abuse.
-        pass
-
-# ==================================================
-# RUN BOT
-# ==================================================
-if __name__ == "__main__":
-    bot.add_cog(OwnerCommands(bot))
-    bot.add_cog(EconomyCommands(bot))
-    bot.add_cog(ShopCommands(bot))
-    bot.add_cog(BusinessCommands(bot))
-    bot.add_cog(LeaderboardCommands(bot))
-    bot.run(TOKEN)
+        if category not in ["money", "xp", "gangs", "
