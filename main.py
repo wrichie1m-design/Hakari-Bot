@@ -455,7 +455,7 @@ async def date_command(ctx, user: discord.User):
         return
     
     data = await get_user_data(ctx.author.id)
-    if data[21]:  # spouse_id exists
+    if data[21]:
         await ctx.send("You are already married! You cannot date someone else.")
         return
     
@@ -464,8 +464,7 @@ async def date_command(ctx, user: discord.User):
         await ctx.send(f"{user.mention} is already married!")
         return
     
-    # Check cooldown (can only date once per day)
-    last_date = data[26]  # last_date column
+    last_date = data[25]
     if last_date:
         last = datetime.fromisoformat(last_date)
         if datetime.utcnow() - last < timedelta(hours=24):
@@ -473,20 +472,16 @@ async def date_command(ctx, user: discord.User):
             await ctx.send(f"You already went on a date recently! Try again in {remaining.seconds//3600}h {(remaining.seconds%3600)//60}m.")
             return
     
-    # Check if user has enough money (500 coins)
     if data[1] < 500:
         await ctx.send("You need 500 coins to go on a date!")
         return
     
-    # Deduct coins
     await update_user_money(ctx.author.id, -500)
     
-    # Update last_date
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("UPDATE users SET last_date = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
         await db.commit()
     
-    # Random date outcome
     outcomes = [
         "had a romantic dinner 🍽️",
         "watched a movie together 🎬",
@@ -514,7 +509,7 @@ async def marry_command(ctx, user: discord.User):
         return
     
     data = await get_user_data(ctx.author.id)
-    if data[21]:  # spouse_id exists
+    if data[21]:
         await ctx.send("You are already married! Divorce first with `.divorce`.")
         return
     
@@ -523,24 +518,20 @@ async def marry_command(ctx, user: discord.User):
         await ctx.send(f"{user.mention} is already married!")
         return
     
-    # Check if user has enough money (5000 coins)
     if data[1] < 5000:
         await ctx.send("You need 5000 coins to propose marriage!")
         return
     
-    # Check affection level (need at least 1000 affection)
-    if target_data[25] < 1000:  # affection column
-        await ctx.send(f"Your affection with {user.mention} is too low! You need at least 1000 affection. Current: {target_data[25]}")
+    if target_data[24] < 1000:
+        await ctx.send(f"Your affection with {user.mention} is too low! You need at least 1000 affection. Current: {target_data[24]}")
         return
     
-    # Check for existing request
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT 1 FROM requests WHERE from_id = ? AND to_id = ? AND request_type = 'marriage'", (ctx.author.id, user.id)) as cursor:
             if await cursor.fetchone():
                 await ctx.send("You already sent a marriage request to this person!")
                 return
     
-    # Deduct coins for proposal
     await update_user_money(ctx.author.id, -5000)
     await send_request(ctx.author.id, user.id, "marriage")
     
@@ -557,15 +548,12 @@ async def divorce_command(ctx):
         await ctx.send("You are not married!")
         return
     
-    # Check if user has enough money (2500 coins for divorce fee)
     if data[1] < 2500:
         await ctx.send("You need 2500 coins to get a divorce!")
         return
     
-    # Deduct coins
     await update_user_money(ctx.author.id, -2500)
     
-    # Remove spouse from both users
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("UPDATE users SET spouse_id = NULL WHERE user_id = ?", (ctx.author.id,))
         await db.execute("UPDATE users SET spouse_id = NULL WHERE user_id = ?", (spouse_id,))
@@ -580,14 +568,13 @@ async def divorce_command(ctx):
 async def affection_command(ctx, user: discord.User = None):
     target = user or ctx.author
     data = await get_user_data(target.id)
-    affection = data[25]
+    affection = data[24]
     level = await get_affection_level(affection)
     
     embed = discord.Embed(title=f"💕 Affection Level: {target.display_name}", color=discord.Color.pink())
     embed.add_field(name="Level", value=level, inline=False)
     embed.add_field(name="Points", value=f"{affection}/∞", inline=False)
     
-    # Show progress bar
     if affection < 5000:
         bar_length = min(20, int(affection / 250))
         bar = "█" * bar_length + "░" * (20 - bar_length)
@@ -616,11 +603,9 @@ async def gift_command(ctx, user: discord.User, amount: int):
         await ctx.send("You don't have enough money to gift that much!")
         return
     
-    # Deduct from sender, add to receiver
     await update_user_money(ctx.author.id, -amount)
     await update_user_money(user.id, amount)
     
-    # Increase affection (every 100 coins gifted = +1 affection)
     affection_gain = amount // 100
     if affection_gain > 0:
         async with aiosqlite.connect("hakari.db") as db:
@@ -659,18 +644,15 @@ async def adopt_command(ctx, user: discord.User):
     
     data = await get_user_data(ctx.author.id)
     
-    # Check if user has enough money (2000 coins)
     if data[1] < 2000:
         await ctx.send("You need 2000 coins to adopt a child!")
         return
     
-    # Check if user is already adopted
     target_data = await get_user_data(user.id)
-    if target_data[22]:  # parent_id exists
+    if target_data[22]:
         await ctx.send(f"{user.mention} already has a parent!")
         return
     
-    # Deduct coins
     await update_user_money(ctx.author.id, -2000)
     
     await send_request(ctx.author.id, user.id, "adopt")
@@ -715,7 +697,6 @@ async def family_command(ctx):
 @not_blacklisted()
 async def accept_request_cmd(ctx, request_id: int = None):
     if request_id is None:
-        # Show pending requests
         requests = await get_pending_requests(ctx.author.id)
         if not requests:
             await ctx.send("You have no pending requests.")
@@ -788,7 +769,7 @@ async def top_couples(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# COGS (Economy, Shop, Business, Leaderboard)
+# COGS
 # ==================================================
 class OwnerCommands(commands.Cog):
     def __init__(self, bot):
@@ -1198,7 +1179,7 @@ class EconomyCommands(commands.Cog):
             await ctx.send("Rob command is disabled.")
             return
         data_target = await get_user_data(target.id)
-        if data_target[6]:
+        if data_target[8]:
             await ctx.send(f"{target.mention} is protected and cannot be robbed.")
             return
         immune_roles = json.loads(await get_guild_setting(ctx.guild.id, "immune_roles"))
@@ -1335,7 +1316,7 @@ class ShopCommands(commands.Cog):
             return
         open_status = "Open" if data[20] else "Closed"
         embed = discord.Embed(title=f"{data[13]}", description=f"Owner: {target.display_name}\nStatus: {open_status}", color=discord.Color.purple())
-        embed.add_field(name="Reputation", value=data[16], inline=True)
+        embed.add_field(name="Reputation", value=data[18], inline=True)
         upgrades = json.loads(data[15])
         embed.add_field(name="Upgrades", value=f"Size: {upgrades.get('size', 1)}\nSlots: {upgrades.get('slots', 5)}\nAdvert: {upgrades.get('advert', 0)}\nTax Reduction: {upgrades.get('tax_reduction', 0)}%", inline=False)
         await ctx.send(embed=embed)
@@ -1500,7 +1481,7 @@ class ShopCommands(commands.Cog):
         if not data[13] or not data[20]:
             await ctx.send("You need an open shop.")
             return
-        last = data[17]
+        last = data[19]
         now = datetime.utcnow()
         if last:
             last_time = datetime.fromisoformat(last)
@@ -1514,7 +1495,7 @@ class ShopCommands(commands.Cog):
         base_income = 20
         size_bonus = 1 + 0.1 * upgrades.get("size", 0)
         advert_bonus = 1 + 0.05 * upgrades.get("advert", 0)
-        rep_bonus = 1 + 0.02 * data[16]
+        rep_bonus = 1 + 0.02 * data[18]
         income = int(base_income * size_bonus * advert_bonus * rep_bonus * max(1, hours_passed))
         await update_user_money(ctx.author.id, income)
         async with aiosqlite.connect("hakari.db") as db:
@@ -1594,3 +1575,240 @@ class BusinessCommands(commands.Cog):
 
     @commands.command(name="buybusiness")
     @economy_enabled()
+    @not_blacklisted()
+    async def buy_business(self, ctx, business_type: str):
+        valid_types = ["restaurant", "casino", "weaponshop", "cafe", "techstore", "fishingstore"]
+        if business_type.lower() not in valid_types:
+            await ctx.send(f"Invalid business type. Choose from: {', '.join(valid_types)}")
+            return
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT 1 FROM businesses WHERE user_id = ?", (ctx.author.id,)) as cursor:
+                if await cursor.fetchone():
+                    await ctx.send("You already own a business. Sell it first with `.sellbusiness`.")
+                    return
+        cost = 1000
+        data = await get_user_data(ctx.author.id)
+        if data[1] < cost:
+            await ctx.send(f"You need {cost} coins to buy a business.")
+            return
+        await update_user_money(ctx.author.id, -cost)
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute(
+                "INSERT INTO businesses (user_id, business_type, level, last_collected) VALUES (?, ?, ?, ?)",
+                (ctx.author.id, business_type.lower(), 1, datetime.utcnow().isoformat())
+            )
+            await db.commit()
+        await ctx.send(f"You bought a {business_type} business for {cost} coins!")
+
+    @commands.command(name="business")
+    @economy_enabled()
+    @not_blacklisted()
+    async def business_info(self, ctx):
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT business_type, level, last_collected FROM businesses WHERE user_id = ?", (ctx.author.id,)) as cursor:
+                row = await cursor.fetchone()
+        if not row:
+            await ctx.send("You don't own a business.")
+            return
+        business_type, level, last_collected = row
+        embed = discord.Embed(title=f"Your {business_type} Business", color=discord.Color.orange())
+        embed.add_field(name="Level", value=level, inline=True)
+        embed.add_field(name="Passive Income Base", value=50 * level, inline=True)
+        if last_collected:
+            last = datetime.fromisoformat(last_collected)
+            hours = (datetime.utcnow() - last).total_seconds() / 3600
+            if hours >= 1:
+                embed.add_field(name="Pending Profits", value=f"~{int(50 * level * hours)} coins", inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="upgradebusiness")
+    @economy_enabled()
+    @not_blacklisted()
+    async def upgrade_business(self, ctx):
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT level FROM businesses WHERE user_id = ?", (ctx.author.id,)) as cursor:
+                row = await cursor.fetchone()
+        if not row:
+            await ctx.send("You don't own a business.")
+            return
+        level = row[0]
+        cost = 500 * level
+        data = await get_user_data(ctx.author.id)
+        if data[1] < cost:
+            await ctx.send(f"Upgrade to level {level+1} costs {cost} coins.")
+            return
+        await update_user_money(ctx.author.id, -cost)
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("UPDATE businesses SET level = level + 1 WHERE user_id = ?", (ctx.author.id,))
+            await db.commit()
+        await ctx.send(f"Your business is now level {level+1}!")
+
+    @commands.command(name="collectprofits")
+    @economy_enabled()
+    @not_blacklisted()
+    async def collect_profits(self, ctx):
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT level, last_collected FROM businesses WHERE user_id = ?", (ctx.author.id,)) as cursor:
+                row = await cursor.fetchone()
+        if not row:
+            await ctx.send("You don't own a business.")
+            return
+        level, last_collected = row
+        now = datetime.utcnow()
+        last = datetime.fromisoformat(last_collected)
+        hours = (now - last).total_seconds() / 3600
+        if hours < 1:
+            await ctx.send("You can collect profits every hour.")
+            return
+        profit = int(50 * level * hours)
+        await update_user_money(ctx.author.id, profit)
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("UPDATE businesses SET last_collected = ? WHERE user_id = ?", (now.isoformat(), ctx.author.id))
+            await db.commit()
+        currency = await get_guild_setting(ctx.guild.id, "currency_emoji")
+        await ctx.send(f"You collected {profit}{currency} from your business!")
+
+    @commands.command(name="sellbusiness")
+    @economy_enabled()
+    @not_blacklisted()
+    async def sell_business(self, ctx):
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT level FROM businesses WHERE user_id = ?", (ctx.author.id,)) as cursor:
+                row = await cursor.fetchone()
+        if not row:
+            await ctx.send("You don't own a business.")
+            return
+        level = row[0]
+        value = 500 * level
+        await update_user_money(ctx.author.id, value)
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("DELETE FROM businesses WHERE user_id = ?", (ctx.author.id,))
+            await db.commit()
+        currency = await get_guild_setting(ctx.guild.id, "currency_emoji")
+        await ctx.send(f"You sold your business for {value}{currency}.")
+
+    @commands.command(name="businessleaderboard")
+    @economy_enabled()
+    @not_blacklisted()
+    async def business_leaderboard(self, ctx):
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute("SELECT user_id, business_type, level FROM businesses ORDER BY level DESC LIMIT 10") as cursor:
+                businesses = await cursor.fetchall()
+        if not businesses:
+            await ctx.send("No businesses found.")
+            return
+        embed = discord.Embed(title="Top Businesses", color=discord.Color.purple())
+        for idx, (user_id, biz_type, level) in enumerate(businesses, 1):
+            embed.add_field(name=f"#{idx} - {biz_type.title()}", value=f"Owner: <@{user_id}>\nLevel: {level}", inline=False)
+        await ctx.send(embed=embed)
+
+class LeaderboardCommands(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name="globalleaderboard", aliases=["glb"])
+    async def global_leaderboard(self, ctx, category: str = "money"):
+        if category not in ["money", "xp", "gangs", "families"]:
+            await ctx.send("Valid categories: money, xp, gangs, families")
+            return
+        async with aiosqlite.connect("hakari.db") as db:
+            if category == "money":
+                async with db.execute("SELECT user_id, money+bank as total FROM users ORDER BY total DESC LIMIT 10") as cursor:
+                    rows = await cursor.fetchall()
+                title = "Global Richest Users"
+                value_func = lambda row: f"{row[1]} coins"
+            elif category == "xp":
+                async with db.execute("SELECT user_id, total_xp FROM users ORDER BY total_xp DESC LIMIT 10") as cursor:
+                    rows = await cursor.fetchall()
+                title = "Global Top XP"
+                value_func = lambda row: f"{row[1]} XP (Level {int((row[1]/100)**0.5)})"
+            elif category == "gangs":
+                async with db.execute("SELECT gang, SUM(money+bank) as total FROM users WHERE gang IS NOT NULL GROUP BY gang ORDER BY total DESC LIMIT 10") as cursor:
+                    rows = await cursor.fetchall()
+                title = "Top Gangs by Wealth"
+                value_func = lambda row: f"{row[0]} - {row[1]} coins"
+            else:
+                async with db.execute("SELECT family, SUM(money+bank) as total FROM users WHERE family IS NOT NULL GROUP BY family ORDER BY total DESC LIMIT 10") as cursor:
+                    rows = await cursor.fetchall()
+                title = "Top Families by Wealth"
+                value_func = lambda row: f"{row[0]} - {row[1]} coins"
+        if not rows:
+            await ctx.send("No data available.")
+            return
+        embed = discord.Embed(title=title, color=discord.Color.gold())
+        for idx, row in enumerate(rows, 1):
+            if category in ["money", "xp"]:
+                user_id = row[0]
+                try:
+                    user = await bot.fetch_user(user_id)
+                    name = user.display_name if user else str(user_id)
+                except:
+                    name = str(user_id)
+                embed.add_field(name=f"#{idx} - {name}", value=value_func(row), inline=False)
+            else:
+                embed.add_field(name=f"#{idx}", value=value_func(row), inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="serverleaderboard", aliases=["slb"])
+    async def server_leaderboard(self, ctx, category: str = "money"):
+        if category not in ["money", "xp"]:
+            await ctx.send("Valid categories: money, xp")
+            return
+        members = ctx.guild.members
+        user_data = []
+        async with aiosqlite.connect("hakari.db") as db:
+            for member in members:
+                if member.bot:
+                    continue
+                async with db.execute("SELECT money, bank, total_xp FROM users WHERE user_id = ?", (member.id,)) as cursor:
+                    row = await cursor.fetchone()
+                if row:
+                    if category == "money":
+                        total = row[0] + row[1]
+                        user_data.append((member, total))
+                    else:
+                        user_data.append((member, row[2]))
+        user_data.sort(key=lambda x: x[1], reverse=True)
+        top = user_data[:10]
+        if not top:
+            await ctx.send("No data available.")
+            return
+        title = f"Server {'Richest' if category=='money' else 'Top XP'} - {ctx.guild.name}"
+        embed = discord.Embed(title=title, color=discord.Color.blue())
+        for idx, (member, value) in enumerate(top, 1):
+            if category == "money":
+                embed.add_field(name=f"#{idx} - {member.display_name}", value=f"{value} coins", inline=False)
+            else:
+                embed.add_field(name=f"#{idx} - {member.display_name}", value=f"{value} XP", inline=False)
+        await ctx.send(embed=embed)
+
+# ==================================================
+# EVENTS
+# ==================================================
+@bot.event
+async def on_ready():
+    await init_db()
+    print(f"✅ Logged in as {bot.user}")
+    print(f"✅ Bot is ready!")
+    print(f"✅ Serving {len(bot.guilds)} servers")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    xp_gain = random.randint(10, 20)
+    new_level = await add_xp(message.author.id, xp_gain)
+    if new_level:
+        await message.channel.send(f"🎉 {message.author.mention} leveled up to level {new_level}!")
+    await bot.process_commands(message)
+
+# ==================================================
+# RUN BOT
+# ==================================================
+if __name__ == "__main__":
+    bot.add_cog(OwnerCommands(bot))
+    bot.add_cog(EconomyCommands(bot))
+    bot.add_cog(ShopCommands(bot))
+    bot.add_cog(BusinessCommands(bot))
+    bot.add_cog(LeaderboardCommands(bot))
+    bot.run(TOKEN)
