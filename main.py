@@ -420,7 +420,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENUS (FIXED: edit_original_response)
+# PAGINATED HELP MENUS (FIXED: handle NotFound errors)
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -430,7 +430,11 @@ class HelpView(discord.ui.View):
         self.page = 0
 
     async def update(self, inter):
-        await inter.edit_original_response(embed=self.pages[self.page], view=self)
+        try:
+            await inter.edit_original_response(embed=self.pages[self.page], view=self)
+        except discord.NotFound:
+            # The original message was deleted; stop the view
+            self.stop()
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
     async def prev(self, inter, btn):
@@ -451,6 +455,7 @@ class HelpView(discord.ui.View):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
+        self.stop()
 
 class OwnerHelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -460,7 +465,10 @@ class OwnerHelpView(discord.ui.View):
         self.page = 0
 
     async def update(self, inter):
-        await inter.edit_original_response(embed=self.pages[self.page], view=self)
+        try:
+            await inter.edit_original_response(embed=self.pages[self.page], view=self)
+        except discord.NotFound:
+            self.stop()
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
     async def prev(self, inter, btn):
@@ -481,9 +489,10 @@ class OwnerHelpView(discord.ui.View):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
+        self.stop()
 
 # ==================================================
-# COMMANDS MENU (.cmds)
+# REGULAR COMMANDS MENU (.cmds)
 # ==================================================
 @bot.command(name="cmds", aliases=["commands"])
 async def help_cmd(ctx):
@@ -830,7 +839,7 @@ async def loaninfo(ctx):
         await ctx.send(embed=embed)
 
 # ==================================================
-# GAMBLING GAMES
+# GAMBLING GAMES (Blackjack, Mines, etc.)
 # ==================================================
 # ---------- Blackjack ----------
 class BlackjackView(discord.ui.View):
@@ -2057,4 +2066,7 @@ async def on_command_error(ctx, error):
 # RUN BOT
 # ==================================================
 if __name__ == "__main__":
+    # Initialize database before bot starts to avoid "no such table" errors
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
     bot.run(TOKEN)
