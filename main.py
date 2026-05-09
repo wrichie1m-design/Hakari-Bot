@@ -351,7 +351,6 @@ class PaymentConfirmView(discord.ui.View):
             await interaction.response.edit_message(content=f"❌ You no longer have enough coins.", view=None)
             self.completed = True
             return
-        # Transfer immediately
         await update_money(self.sender.id, -self.amount)
         await update_money(self.recipient.id, self.amount)
         await interaction.response.edit_message(content=f"✅ You paid {format_number(self.amount)}{self.emoji} to {self.recipient.mention}!", view=None)
@@ -421,7 +420,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENUS
+# PAGINATED HELP MENUS (FIXED: edit_original_response)
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -431,7 +430,7 @@ class HelpView(discord.ui.View):
         self.page = 0
 
     async def update(self, inter):
-        await inter.response.edit_message(embed=self.pages[self.page], view=self)
+        await inter.edit_original_response(embed=self.pages[self.page], view=self)
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
     async def prev(self, inter, btn):
@@ -461,7 +460,7 @@ class OwnerHelpView(discord.ui.View):
         self.page = 0
 
     async def update(self, inter):
-        await inter.response.edit_message(embed=self.pages[self.page], view=self)
+        await inter.edit_original_response(embed=self.pages[self.page], view=self)
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
     async def prev(self, inter, btn):
@@ -484,7 +483,7 @@ class OwnerHelpView(discord.ui.View):
         await inter.message.delete()
 
 # ==================================================
-# REGULAR COMMANDS MENU (.cmds)
+# COMMANDS MENU (.cmds)
 # ==================================================
 @bot.command(name="cmds", aliases=["commands"])
 async def help_cmd(ctx):
@@ -522,7 +521,7 @@ async def owner_commands_cmd(ctx):
             value="`.addmoney @user <amount>`\n`.removemoney @user <amount>`\n`.setmoney @user <amount>`\n`.addbank @user <amount>`\n`.removebank @user <amount>`\n`.economywipe`\n`.toggleeconomy`\n`.togglerob`\n`.togglegambling`\n`.setdailyamount <amount>`\n`.setcurrency <emoji>`", inline=False),
         discord.Embed(title="👑 Owner Commands (2/2)", color=discord.Color.red()).add_field(
             name="Protection & Logs",
-            value="`.protect @user`\n`.unprotect @user`\n`.blacklist @user`\n`.whitelist @user`\n`.logs [limit]`\n\n**.addowner <id>`\n`.removeowner <id>`\n`.ownerlist`", inline=False)
+            value="`.protect @user`\n`.unprotect @user`\n`.blacklist @user`\n`.whitelist @user`\n`.logs [limit]`\n\n**Owner Management**\n`.addowner <id>`\n`.removeowner <id>`\n`.ownerlist`", inline=False)
     ]
     await ctx.send(embed=pages[0], view=OwnerHelpView(ctx, pages))
 
@@ -1158,7 +1157,6 @@ async def tower(ctx, amount_str: str, floors: int = 5):
     win_chance = max(0.3, 0.9 - (floors * 0.03))
     win = random.random() < win_chance
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-
     await update_money(ctx.author.id, -amount)
     if win:
         winnings = int(amount * multiplier)
@@ -1169,39 +1167,27 @@ async def tower(ctx, amount_str: str, floors: int = 5):
         await ctx.send(f"🏗️ CRASH! You fell at floor **{fall_floor}** of {floors}. Lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# NEW GAMBLING COMMANDS
+# NEW GAMBLING COMMANDS (Roulette, HighLow, Dice, HorseRace)
 # ==================================================
-
-# ---------- Roulette ----------
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 async def roulette(ctx, amount_str: str, *, bet: str):
-    """Bet on red, black, green, or a number 0-36"""
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    
     bet = bet.lower().strip()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    
-    # Roulette wheel (European: 0-36)
     number = random.randint(0, 36)
-    
-    # Determine color
     if number == 0:
         color = "green"
     elif number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]:
         color = "red"
     else:
         color = "black"
-    
     win = False
     payout = 0
-    
-    # Check if bet matches
     if bet.isdigit():
         if int(bet) == number:
             win = True
@@ -1224,7 +1210,6 @@ async def roulette(ctx, amount_str: str, *, bet: str):
             result_msg = f"🟢 The ball landed on **0**! You won {format_number(payout)}{emoji}!"
     else:
         return await ctx.send("❌ Invalid bet! Choose: red, black, green, or a number 0-36")
-    
     if win:
         await update_money(ctx.author.id, payout)
         await ctx.send(result_msg)
@@ -1232,68 +1217,48 @@ async def roulette(ctx, amount_str: str, *, bet: str):
         await update_money(ctx.author.id, -amount)
         await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
 
-# ---------- High Low ----------
 @bot.command(name="highlow", aliases=["hl"])
 @economy_check()
 async def highlow(ctx, amount_str: str, choice: str):
-    """Guess if next card is Higher or Lower"""
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    
     if choice.lower() not in ["h", "higher", "l", "lower"]:
         return await ctx.send("❌ Choose: h (higher) or l (lower)")
-    
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    
     cards = {2:"2",3:"3",4:"4",5:"5",6:"6",7:"7",8:"8",9:"9",10:"10",11:"J",12:"Q",13:"K",14:"A"}
     card_values = [2,3,4,5,6,7,8,9,10,11,12,13,14]
     first_card = random.choice(card_values)
     second_card = random.choice(card_values)
-    
     is_higher = second_card > first_card
     is_lower = second_card < first_card
-    
-    win = False
     if choice.lower() in ["h", "higher"] and is_higher:
-        win = True
-        payout = amount * 2
+        await update_money(ctx.author.id, amount*2)
+        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n✅ You won {format_number(amount*2)}{emoji}!")
     elif choice.lower() in ["l", "lower"] and is_lower:
-        win = True
-        payout = amount * 2
+        await update_money(ctx.author.id, amount*2)
+        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n✅ You won {format_number(amount*2)}{emoji}!")
     elif second_card == first_card:
         await update_money(ctx.author.id, amount)
-        await ctx.send(f"🃏 First card: **{cards[first_card]}**, Second card: **{cards[second_card]}** (Tie! Money returned)")
-        return
-    
-    if win:
-        await update_money(ctx.author.id, payout)
-        await ctx.send(f"🃏 First card: **{cards[first_card]}**, Second card: **{cards[second_card]}**\n✅ You won {format_number(payout)}{emoji}!")
+        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]} (Tie! Money returned).")
     else:
         await update_money(ctx.author.id, -amount)
-        await ctx.send(f"🃏 First card: **{cards[first_card]}**, Second card: **{cards[second_card]}**\n❌ You lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n❌ You lost {format_number(amount)}{emoji}.")
 
-# ---------- Dice ----------
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
 async def dice(ctx, amount_str: str, guess: int):
-    """Bet on a dice number 1-6"""
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    
     if guess < 1 or guess > 6:
-        return await ctx.send("❌ Guess must be between 1 and 6!")
-    
+        return await ctx.send("❌ Guess must be between 1 and 6.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    roll = random.randint(1, 6)
-    
+    roll = random.randint(1,6)
     if roll == guess:
         payout = amount * 5
         await update_money(ctx.author.id, payout)
@@ -1302,33 +1267,20 @@ async def dice(ctx, amount_str: str, guess: int):
         await update_money(ctx.author.id, -amount)
         await ctx.send(f"🎲 You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
 
-# ---------- Horse Race ----------
 @bot.command(name="horserace", aliases=["hrace"])
 @economy_check()
 async def horserace(ctx, amount_str: str, horse: str):
-    """Bet on a horse: A, B, C, or D"""
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    
     horse = horse.upper()
-    if horse not in ["A", "B", "C", "D"]:
-        return await ctx.send("❌ Choose a horse: A, B, C, or D")
-    
+    if horse not in ["A","B","C","D"]:
+        return await ctx.send("❌ Choose horse A, B, C, or D.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    
-    horses = {
-        "A": {"multiplier": 2.5, "win_chance": 0.40},
-        "B": {"multiplier": 3.0, "win_chance": 0.30},
-        "C": {"multiplier": 4.0, "win_chance": 0.20},
-        "D": {"multiplier": 6.0, "win_chance": 0.10}
-    }
-    
+    horses = {"A":2.5, "B":3.0, "C":4.0, "D":6.0}
     rand = random.random()
-    winner = "A"
     if rand < 0.40:
         winner = "A"
     elif rand < 0.70:
@@ -1337,24 +1289,18 @@ async def horserace(ctx, amount_str: str, horse: str):
         winner = "C"
     else:
         winner = "D"
-    
-    race_animation = [
-        "🏁 A: 🐎     B: 🐎     C: 🐎     D: 🐎",
+    msg = await ctx.send("🏁 **THE RACE IS STARTING!** 🏁\n🏁 A: 🐎     B: 🐎     C: 🐎     D: 🐎")
+    frames = [
         "🏁 A: 🐎→   B: 🐎     C: 🐎     D: 🐎",
         "🏁 A: 🐎→→  B: 🐎→    C: 🐎     D: 🐎",
         "🏁 A: 🐎→→→ B: 🐎→→   C: 🐎→    D: 🐎",
         "🏁 A: 🐎→→→→B: 🐎→→→  C: 🐎→→   D: 🐎→",
     ]
-    
-    msg = await ctx.send("🏁 **THE RACE IS STARTING!** 🏁\n" + race_animation[0])
-    for frame in race_animation[1:]:
+    for f in frames:
         await asyncio.sleep(1)
-        await msg.edit(content=frame)
-    await asyncio.sleep(0.5)
-    
+        await msg.edit(content=f)
     if horse == winner:
-        multiplier = horses[winner]["multiplier"]
-        payout = int(amount * multiplier)
+        payout = int(amount * horses[winner])
         await update_money(ctx.author.id, payout)
         await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} won! You won {format_number(payout)}{emoji}!")
     else:
