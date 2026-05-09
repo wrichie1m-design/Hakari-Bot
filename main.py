@@ -420,7 +420,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENUS
+# PAGINATED HELP MENUS (FIXED with defer)
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -436,21 +436,23 @@ class HelpView(discord.ui.View):
             self.stop()
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
-    async def prev(self, inter, btn):
+    async def prev(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
+        await inter.response.defer()
         self.page = (self.page - 1) % len(self.pages)
         await self.update(inter)
 
     @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
-    async def nxt(self, inter, btn):
+    async def nxt(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
+        await inter.response.defer()
         self.page = (self.page + 1) % len(self.pages)
         await self.update(inter)
 
     @discord.ui.button(label="❌", style=discord.ButtonStyle.danger)
-    async def close(self, inter, btn):
+    async def close(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
@@ -470,21 +472,23 @@ class OwnerHelpView(discord.ui.View):
             self.stop()
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
-    async def prev(self, inter, btn):
+    async def prev(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
+        await inter.response.defer()
         self.page = (self.page - 1) % len(self.pages)
         await self.update(inter)
 
     @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
-    async def nxt(self, inter, btn):
+    async def nxt(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
+        await inter.response.defer()
         self.page = (self.page + 1) % len(self.pages)
         await self.update(inter)
 
     @discord.ui.button(label="❌", style=discord.ButtonStyle.danger)
-    async def close(self, inter, btn):
+    async def close(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user != self.ctx.author:
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
@@ -1163,7 +1167,7 @@ async def tower(ctx, amount_str: str, floors: int = 5):
         await ctx.send(f"🏗️ CRASH! You fell at floor **{fall_floor}** of {floors}. Lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# NEW GAMBLING COMMANDS (Roulette, HighLow, Dice, HorseRace)
+# ROULETTE, HIGHLOW, DICE, HORSERACE
 # ==================================================
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
@@ -1176,33 +1180,24 @@ async def roulette(ctx, amount_str: str, *, bet: str):
     bet = bet.lower().strip()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     number = random.randint(0, 36)
-    if number == 0:
-        color = "green"
-    elif number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]:
-        color = "red"
-    else:
-        color = "black"
+    color = "green" if number == 0 else ("red" if number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "black")
     win = False
     payout = 0
     if bet.isdigit():
         if int(bet) == number:
-            win = True
-            payout = amount * 35
+            win, payout = True, amount * 35
             result_msg = f"🎯 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["red", "r"]:
         if color == "red":
-            win = True
-            payout = amount * 2
+            win, payout = True, amount * 2
             result_msg = f"🔴 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["black", "b"]:
         if color == "black":
-            win = True
-            payout = amount * 2
+            win, payout = True, amount * 2
             result_msg = f"⚫ The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["green", "g", "0"]:
         if number == 0:
-            win = True
-            payout = amount * 14
+            win, payout = True, amount * 14
             result_msg = f"🟢 The ball landed on **0**! You won {format_number(payout)}{emoji}!"
     else:
         return await ctx.send("❌ Invalid bet! Choose: red, black, green, or a number 0-36")
@@ -1225,23 +1220,23 @@ async def highlow(ctx, amount_str: str, choice: str):
         return await ctx.send("❌ Choose: h (higher) or l (lower)")
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     cards = {2:"2",3:"3",4:"4",5:"5",6:"6",7:"7",8:"8",9:"9",10:"10",11:"J",12:"Q",13:"K",14:"A"}
-    card_values = [2,3,4,5,6,7,8,9,10,11,12,13,14]
-    first_card = random.choice(card_values)
-    second_card = random.choice(card_values)
-    is_higher = second_card > first_card
-    is_lower = second_card < first_card
-    if choice.lower() in ["h", "higher"] and is_higher:
+    values = [2,3,4,5,6,7,8,9,10,11,12,13,14]
+    first = random.choice(values)
+    second = random.choice(values)
+    is_higher = second > first
+    is_lower = second < first
+    if choice.lower() in ["h","higher"] and is_higher:
         await update_money(ctx.author.id, amount*2)
-        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n✅ You won {format_number(amount*2)}{emoji}!")
-    elif choice.lower() in ["l", "lower"] and is_lower:
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
+    elif choice.lower() in ["l","lower"] and is_lower:
         await update_money(ctx.author.id, amount*2)
-        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n✅ You won {format_number(amount*2)}{emoji}!")
-    elif second_card == first_card:
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
+    elif second == first:
         await update_money(ctx.author.id, amount)
-        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]} (Tie! Money returned).")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]} (Tie! Money returned).")
     else:
         await update_money(ctx.author.id, -amount)
-        await ctx.send(f"🃏 First: {cards[first_card]}, Second: {cards[second_card]}\n❌ You lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n❌ You lost {format_number(amount)}{emoji}.")
 
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
@@ -1422,6 +1417,7 @@ async def global_market(ctx):
             msg += f"• {name}\n"
     await ctx.send(msg)
 
+# ---- Business commands ----
 @bot.command(name="buybusiness")
 @economy_check()
 async def buy_business(ctx, biz_type: str):
