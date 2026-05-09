@@ -21,10 +21,14 @@ intents.members = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 # ==================================================
+# REMOVE DEFAULT HELP COMMAND FIRST - THIS FIXES THE ERROR!
+# ==================================================
+bot.remove_command('help')
+
+# ==================================================
 # HELPER FUNCTIONS
 # ==================================================
 def parse_amount(amount_str: str):
-    """Convert 1k, 2.5m, etc. to integer, or 'all'"""
     if amount_str.lower() == "all":
         return "all"
     amount_str = amount_str.lower().strip()
@@ -38,7 +42,6 @@ def parse_amount(amount_str: str):
         return int(float(amount_str))
 
 def format_number(num: int) -> str:
-    """Format 1000 → 1k, 1,500,000 → 1.5m"""
     if num >= 1_000_000_000:
         return f"{num/1_000_000_000:.1f}b".replace('.0b', 'b')
     elif num >= 1_000_000:
@@ -49,12 +52,11 @@ def format_number(num: int) -> str:
         return str(num)
 
 async def is_family_member(user_id: int, target_id: int) -> bool:
-    """Check if target is spouse, parent, or child of user"""
     user = await get_user(user_id)
     target = await get_user(target_id)
-    if user[17] == target_id or target[17] == user_id:  # spouse
+    if user[17] == target_id or target[17] == user_id:
         return True
-    if user[18] == target_id or target[18] == user_id:  # parent
+    if user[18] == target_id or target[18] == user_id:
         return True
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (user_id, target_id)) as cur:
@@ -158,7 +160,7 @@ async def init_db():
     print("✅ Database ready.")
 
 # ==================================================
-# BACKGROUND TASKS (Interest)
+# BACKGROUND TASKS
 # ==================================================
 @tasks.loop(hours=1)
 async def loan_interest():
@@ -178,7 +180,7 @@ async def before_loan():
 @tasks.loop(hours=24)
 async def bank_interest():
     async with aiosqlite.connect("hakari.db") as db:
-        rate = await get_setting(0, "interest_rate") if bot.guilds else 5
+        rate = 5
         async with db.execute("SELECT user_id, bank, last_interest FROM users WHERE bank > 0") as cur:
             rows = await cur.fetchall()
         for uid, bank, last in rows:
@@ -323,7 +325,7 @@ def main_owner_only():
     return commands.check(pred)
 
 # ==================================================
-# INTERACTIVE VIEWS (Payments, Requests)
+# INTERACTIVE VIEWS
 # ==================================================
 class PaymentConfirmView(discord.ui.View):
     def __init__(self, sender, recipient, amount, emoji):
@@ -345,7 +347,6 @@ class PaymentConfirmView(discord.ui.View):
             await interaction.response.edit_message(content=f"❌ You no longer have enough coins.", view=None)
             self.completed = True
             return
-        # Ask recipient
         view2 = PaymentAcceptView(self.sender, self.recipient, self.amount, self.emoji)
         embed = discord.Embed(title="💸 Payment Request", color=discord.Color.blue())
         embed.add_field(name="From", value=self.sender.mention, inline=True)
@@ -454,7 +455,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENU
+# HELP MENU
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -486,17 +487,17 @@ class HelpView(discord.ui.View):
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
 
-@bot.command(name="cmds", aliases=["commands", "help"])
+@bot.command(name="cmds", aliases=["commands"])
 async def help_cmd(ctx):
     owner = await is_owner(ctx.author.id)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
         discord.Embed(title="💰 Economy (1/6)", color=discord.Color.blue()).add_field(
-            name="Commands", value=f"`.bal` – balance\n`.daily` – {emoji}1500 (10 msg)\n`.work` – {emoji}150-300 (5m)\n`.sleep` – {emoji}2000-2500 (8h)\n`.crime` – {emoji}200-800 (15m)\n`.deposit <all/1k>`\n`.withdraw <all/1k>` (max 50k)\n`.pay @user <amount/all>` (both confirm)\n`.rob @user` (1h cooldown)\n`.interest` – bank interest", inline=False),
+            name="Commands", value=f"`.bal` – balance\n`.daily` – {emoji}1500 (10 msg)\n`.work` – {emoji}150-300 (5m)\n`.sleep` – {emoji}2000-2500 (8h)\n`.crime` – {emoji}200-800 (15m)\n`.deposit <all/1k>`\n`.withdraw <all/1k>` (max 50k)\n`.pay @user <amount/all>`\n`.rob @user` (1h)\n`.interest`", inline=False),
         discord.Embed(title="🏦 Loans (2/6)", color=discord.Color.purple()).add_field(
-            name="Commands", value="`.loan <amount>` – borrow (10% hourly)\n`.repay <all/half/amount>`\n`.loaninfo` – status", inline=False),
+            name="Commands", value="`.loan <amount>`\n`.repay <all/half/amount>`\n`.loaninfo`", inline=False),
         discord.Embed(title="🎰 Gambling (3/6)", color=discord.Color.gold()).add_field(
-            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19 mines)\n`.tower <amount> <floors>` (3‑12)", inline=False),
+            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount> <floors>` (3‑12)", inline=False),
         discord.Embed(title="🛒 Shop & Business (4/6)", color=discord.Color.green()).add_field(
             name="Commands", value="`.createshop <name>`\n`.addshopitem <price> <item>`\n`.removeshopitem <item>`\n`.myshop`\n`.visitshop @user`\n`.buyfromshop @user <item>`\n`.closeshop`\n`.globalmarket`\n`.buybusiness <type>`\n`.business`\n`.upgradebusiness`\n`.collectprofits`\n`.sellbusiness`", inline=False),
         discord.Embed(title="💕 Relationships (5/6)", color=discord.Color.pink()).add_field(
@@ -506,7 +507,7 @@ async def help_cmd(ctx):
     ]
     if owner:
         pages.append(discord.Embed(title="👑 Owner (7/7)", color=discord.Color.red()).add_field(
-            name="Commands", value="`.addowner <id>`\n`.removeowner <id>`\n`.ownerlist`\n`.addmoney @user <amount>`\n`.removemoney @user <amount>`\n`.setmoney @user <amount>`\n`.addbank @user <amount>`\n`.removebank @user <amount>`\n`.protect @user`\n`.unprotect @user`\n`.blacklist @user`\n`.whitelist @user`\n`.economywipe`\n`.toggleeconomy` / `.togglerob` / `.togglegambling`\n`.setdailyamount` / `.setsleepamount` / `.setworkamount` / `.setcrimeamount`\n`.setinterestrate` / `.setloaninterest`\n`.setmaxwithdraw`\n`.setcurrency <emoji>`\n`.logs`", inline=False))
+            name="Commands", value="`.addowner <id>`\n`.removeowner <id>`\n`.ownerlist`\n`.addmoney @user <amount>`\n`.removemoney @user <amount>`\n`.setmoney @user <amount>`\n`.addbank @user <amount>`\n`.removebank @user <amount>`\n`.protect @user`\n`.unprotect @user`\n`.blacklist @user`\n`.whitelist @user`\n`.economywipe`\n`.toggleeconomy` / `.togglerob` / `.togglegambling`\n`.setdailyamount`\n`.setcurrency`\n`.logs`", inline=False))
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
 
 # ==================================================
@@ -817,9 +818,8 @@ async def loaninfo(ctx):
         await ctx.send(embed=embed)
 
 # ==================================================
-# GAMBLING GAMES
+# BLACKJACK
 # ==================================================
-# ---- Blackjack with Hit/Stand/Double ----
 class BlackjackView(discord.ui.View):
     def __init__(self, ctx, bet, player, dealer):
         super().__init__(timeout=120)
@@ -945,7 +945,9 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# ---- Mines (fixed: no cashout without reveal) ----
+# ==================================================
+# MINES (fixed - requires at least 1 reveal to cashout)
+# ==================================================
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
         super().__init__(timeout=120)
@@ -979,7 +981,6 @@ class MinesView(discord.ui.View):
             self.revealed[pos] = True
             if pos in self.mine_pos:
                 self.ended = True
-                # reveal all mines
                 for child in self.children:
                     if isinstance(child, discord.ui.Button) and child.custom_id and child.custom_id.startswith("m"):
                         idx = int(child.custom_id[1:])
@@ -1066,7 +1067,9 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     await ctx.send(embed=embed, view=view)
     await update_money(ctx.author.id, -amount)
 
-# ---- Other gambling (simpler) ----
+# ==================================================
+# OTHER GAMBLING
+# ==================================================
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
 async def coinflip(ctx, amount_str: str, choice: str = None):
@@ -1151,7 +1154,7 @@ async def tower(ctx, amount_str: str, floors: int = 5):
         await ctx.send(f"🏗️ CRASH at floor {random.randint(2,floors)}! Lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# SHOP & BUSINESS (simplified but working)
+# SHOP & BUSINESS
 # ==================================================
 @bot.command(name="createshop")
 @economy_check()
@@ -1269,7 +1272,6 @@ async def global_market(ctx):
             msg += f"• {name}\n"
     await ctx.send(msg)
 
-# ---- Business commands ----
 @bot.command(name="buybusiness")
 @economy_check()
 async def buy_business(ctx, biz_type: str):
@@ -1655,13 +1657,18 @@ async def level(ctx):
     data = await get_user(ctx.author.id)
     lvl = data[4]
     xp = data[5]
-    needed = ((lvl+1)**2)*100 - xp
-    bar_len = min(20, int(xp / (((lvl+1)**2)*100) * 20)) if lvl>0 else min(20, int(xp/100*20))
+    next_xp = ((lvl+1)**2)*100
+    needed = next_xp - xp
+    if lvl == 0:
+        bar_len = min(20, int(xp/100*20))
+    else:
+        prev_xp = (lvl**2)*100
+        bar_len = min(20, int((xp-prev_xp)/(next_xp-prev_xp)*20))
     bar = "█"*bar_len + "░"*(20-bar_len)
-    await ctx.send(f"📊 **{ctx.author.display_name}**\nLevel: {lvl}\nXP: {format_number(xp)} / {format_number(((lvl+1)**2)*100)}\nProgress: `{bar}`\nNeeded: {format_number(needed)} XP")
+    await ctx.send(f"📊 **{ctx.author.display_name}**\nLevel: {lvl}\nXP: {format_number(xp)} / {format_number(next_xp)}\nProgress: `{bar}`\nNeeded: {format_number(needed)} XP")
 
 # ==================================================
-# OWNER COMMANDS (only a few core ones; others can be added similarly)
+# OWNER COMMANDS
 # ==================================================
 @bot.command(name="addmoney")
 @owner_only()
@@ -1705,9 +1712,7 @@ async def addbank(ctx, user: discord.User, amount_str: str):
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET bank = bank + ? WHERE user_id = ?", (amt, user.id))
-        await db.commit()
+    await update_bank(user.id, amt)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Added {format_number(amt)}{emoji} to {user.mention}'s bank.")
 
@@ -1718,9 +1723,7 @@ async def removebank(ctx, user: discord.User, amount_str: str):
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET bank = bank - ? WHERE user_id = ?", (amt, user.id))
-        await db.commit()
+    await update_bank(user.id, -amt)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
 
