@@ -420,7 +420,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENUS (FIXED: handle NotFound errors)
+# PAGINATED HELP MENUS
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -840,7 +840,7 @@ async def loaninfo(ctx):
 # ==================================================
 # GAMBLING GAMES
 # ==================================================
-# ---------- Blackjack ----------
+# ---------- Blackjack (no Double Down) ----------
 class BlackjackView(discord.ui.View):
     def __init__(self, ctx, bet, player, dealer):
         super().__init__(timeout=120)
@@ -925,18 +925,6 @@ class BlackjackView(discord.ui.View):
         else:
             await self.end_game("push")
         await inter.message.delete()
-
-    @discord.ui.button(label="Double Down", style=discord.ButtonStyle.danger)
-    async def double(self, inter, btn):
-        if inter.user != self.ctx.author:
-            return
-        self.bet *= 2
-        self.player.append(random.choice([2,3,4,5,6,7,8,9,10,10,10,10,11]))
-        if await self.hand_value(self.player) > 21:
-            await self.end_game("lose")
-            await inter.message.delete()
-            return
-        await self.stand.callback(inter, btn)
 
     async def on_timeout(self):
         if not self.ended:
@@ -1086,7 +1074,7 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     await ctx.send(embed=embed, view=view)
     await update_money(ctx.author.id, -amount)
 
-# ---------- Other Gambling ----------
+# ---------- Coinflip, Slots, Crash, Tower ----------
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
 async def coinflip(ctx, amount_str: str, choice: str = None):
@@ -2068,9 +2056,7 @@ async def on_command_error(ctx, error):
 # RUN BOT
 # ==================================================
 if __name__ == "__main__":
-    # Initialize database before bot starts
     async def main():
         await init_db()
         await bot.start(TOKEN)
-    
     asyncio.run(main())
