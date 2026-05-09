@@ -55,19 +55,33 @@ def format_number(num: int) -> str:
     else:
         return str(num)
 
+async def is_family_member(user_id: int, target_id: int) -> bool:
+    user = await get_user(user_id)
+    target = await get_user(target_id)
+    if user.get('spouse_id') == target_id or target.get('spouse_id') == user_id:
+        return True
+    if user.get('parent_id') == target_id or target.get('parent_id') == user_id:
+        return True
+    async with aiosqlite.connect("hakari.db") as db:
+        async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (user_id, target_id)) as cur:
+            if await cur.fetchone():
+                return True
+        async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (target_id, user_id)) as cur:
+            if await cur.fetchone():
+                return True
+    return False
+
 # ==================================================
 # DATABASE SETUP
 # ==================================================
 async def init_db():
     async with aiosqlite.connect("hakari.db") as db:
-        # Owners table
         await db.execute('''CREATE TABLE IF NOT EXISTS owners (
             user_id INTEGER PRIMARY KEY,
             is_main INTEGER DEFAULT 0
         )''')
         await db.execute("INSERT OR IGNORE INTO owners (user_id, is_main) VALUES (?, 1)", (MAIN_OWNER_ID,))
 
-        # Users table (all columns)
         await db.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             money INTEGER DEFAULT 0,
@@ -191,7 +205,7 @@ async def before_bank():
     await bot.wait_until_ready()
 
 # ==================================================
-# DATABASE HELPERS (using dictionary for clarity)
+# DATABASE HELPERS (using dict for clarity)
 # ==================================================
 async def get_user(user_id: int):
     async with aiosqlite.connect("hakari.db") as db:
@@ -496,7 +510,7 @@ async def help_cmd(ctx):
         discord.Embed(title="🏦 Loans (2/6)", color=discord.Color.purple()).add_field(
             name="Commands", value="`.loan <amount>` (max 50k)\n`.repay <all/half/amount>`\n`.loaninfo`", inline=False),
         discord.Embed(title="🎰 Gambling (3/6)", color=discord.Color.gold()).add_field(
-            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount>` (8-12 floors, mines increase)\n`.roulette <amount> <red/black/green/number>`\n`.highlow <amount> <h/l>`\n`.dice <amount> <1-6>`\n`.horserace <amount> <A/B/C/D>`", inline=False),
+            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount>` (door pick: 3 doors, 1 mine)\n`.roulette <amount> <red/black/green/number>`\n`.highlow <amount> <h/l>`\n`.dice <amount> <1-6>`\n`.horserace <amount> <A/B/C/D>`", inline=False),
         discord.Embed(title="🛒 Shop & Business (4/6)", color=discord.Color.green()).add_field(
             name="Commands", value="`.createshop <name>`\n`.addshopitem <price> <item>`\n`.removeshopitem <item>`\n`.myshop`\n`.visitshop @user`\n`.buyfromshop @user <item>`\n`.closeshop`\n`.globalmarket`\n`.buybusiness <type>`\n`.business`\n`.upgradebusiness`\n`.collectprofits`\n`.sellbusiness`", inline=False),
         discord.Embed(title="💕 Relationships (5/6)", color=discord.Color.pink()).add_field(
@@ -751,7 +765,7 @@ async def loan(ctx, amount_str: str):
     if amount > 50000:
         return await ctx.send("❌ Max loan is 50,000 coins per request.")
     data = await get_user(ctx.author.id)
-    if data['loan_amount'] > 0:
+    if data.get('loan_amount', 0) > 0:
         return await ctx.send(f"❌ You already have a loan of {format_number(data['loan_amount'])}. Repay first with `.repay all`.")
     if data.get('loan_taken_at'):
         last = datetime.fromisoformat(data['loan_taken_at'])
@@ -770,7 +784,7 @@ async def loan(ctx, amount_str: str):
 @economy_check()
 async def repay(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
-    loan = data['loan_amount']
+    loan = data.get('loan_amount', 0)
     if loan <= 0:
         return await ctx.send("❌ No active loan.")
     if amount_str.lower() == "all":
@@ -805,7 +819,7 @@ async def repay(ctx, amount_str: str):
 @economy_check()
 async def loaninfo(ctx):
     data = await get_user(ctx.author.id)
-    loan = data['loan_amount']
+    loan = data.get('loan_amount', 0)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     if loan <= 0:
         embed = discord.Embed(title="🏦 Loan Status", color=discord.Color.green())
@@ -1128,8 +1142,8 @@ async def crash(ctx, amount_str: str):
         await update_money(ctx.author.id, -amount)
         await ctx.send(f"💥 Crashed at {mult}x! Lost {format_number(amount)}{emoji}.")
 
-# ---------- Interactive Tower Game (8-12 floors, dynamic mines) ----------
-class TowerView(discord.ui.View):
+# ---------- TOWER GAME (Door Pick: 3 doors, 1 mine per floor) ----------
+class TowerDoorView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=120)
         self.ctx = ctx
@@ -1139,29 +1153,23 @@ class TowerView(discord.ui.View):
         self.max_floor = random.randint(8, 12)
         self.game_over = False
         self.start_time = datetime.now(timezone.utc)
-        
-        for i in range(1, self.max_floor + 1):
-            btn = discord.ui.Button(label=str(i), style=discord.ButtonStyle.secondary, row=(i-1)//4, custom_id=f"floor_{i}")
-            btn.callback = self.make_floor_callback(i)
+        self.mine_position = None
+        self.add_floor_buttons()
+
+    def add_floor_buttons(self):
+        """Remove old door buttons and add new set for the current floor."""
+        for child in self.children[:]:
+            if isinstance(child, discord.ui.Button) and child.custom_id and child.custom_id.startswith("door_"):
+                self.remove_item(child)
+        self.mine_position = random.randint(1, 3)
+        for i in range(1, 4):
+            btn = discord.ui.Button(label=f"🚪 Door {i}", style=discord.ButtonStyle.secondary, custom_id=f"door_{i}")
+            btn.callback = self.make_door_callback(i)
             self.add_item(btn)
-        
-        self.cashout_btn = discord.ui.Button(label="💰 Cash Out", style=discord.ButtonStyle.success, row=3)
-        self.cashout_btn.callback = self.cashout_callback
-        self.add_item(self.cashout_btn)
-
-    def get_mines_for_floor(self, floor):
-        if floor <= 3:
-            return 1
-        elif floor <= 7:
-            return 2
-        else:
-            return 3
-
-    def get_survival_chance(self, floor):
-        mines = self.get_mines_for_floor(floor)
-        base_chance = 0.95 - (floor * 0.01)
-        mine_penalty = 0.10 * (mines - 1)
-        return max(0.4, base_chance - mine_penalty)
+        if not any(isinstance(c, discord.ui.Button) and c.label == "💰 Cash Out" for c in self.children):
+            self.cashout_btn = discord.ui.Button(label="💰 Cash Out", style=discord.ButtonStyle.success)
+            self.cashout_btn.callback = self.cashout_callback
+            self.add_item(self.cashout_btn)
 
     def get_multiplier(self, floor):
         return round(1.5 ** floor, 2)
@@ -1171,52 +1179,36 @@ class TowerView(discord.ui.View):
             return self.bet
         return int(self.bet * self.get_multiplier(self.current_floor))
 
-    async def update_embed(self, interaction, crashed=False, crash_floor=None):
+    async def update_embed(self, interaction, crashed=False):
         cashout_value = self.get_cashout_value()
         embed = discord.Embed(
-            title=f"{self.ctx.author.display_name}'s Tower",
+            title=f"{self.ctx.author.display_name}'s Tower – Door Pick",
             color=0x2ecc71 if not crashed else 0xe74c3c
         )
         embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
         embed.add_field(name="Floor", value=f"{self.current_floor}/{self.max_floor}", inline=True)
-        embed.add_field(name="Cashout Value", value=f"{format_number(cashout_value)} {self.emoji}", inline=True)
-        
-        if self.current_floor < self.max_floor and not self.game_over:
-            next_floor = self.current_floor + 1
-            mines = self.get_mines_for_floor(next_floor)
-            mine_emoji = "💣" * mines
-            embed.add_field(name=f"Next Floor ({next_floor}) Danger", value=f"{mine_emoji} {mines} mine{'s' if mines > 1 else ''}", inline=False)
-        
-        if crashed:
-            embed.add_field(name="💥 CRASH!", value=f"You hit {self.get_mines_for_floor(crash_floor)} mine{'s' if self.get_mines_for_floor(crash_floor) > 1 else ''} at floor **{crash_floor}**! Lost {format_number(self.bet)}{self.emoji}.", inline=False)
-            embed.color = 0xe74c3c
+        embed.add_field(name="💰 Cashout Value", value=f"{format_number(cashout_value)} {self.emoji}", inline=True)
+        if not crashed:
+            embed.add_field(name="Pick a Door", value="One door hides a 💣 mine. The other two are safe.", inline=False)
         else:
-            embed.set_footer(text=f"Click a floor number to climb higher. Cash out anytime! (Max floor: {self.max_floor})")
-        
+            embed.add_field(name="💥 BOOM!", value=f"You picked the door with the mine at floor **{self.current_floor+1}**! Lost {format_number(self.bet)}{self.emoji}.", inline=False)
+        embed.set_footer(text=f"Floors: {self.max_floor} | Multiplier: {self.get_multiplier(self.current_floor)}x")
         await interaction.response.edit_message(embed=embed, view=self if not crashed else None)
 
-    def make_floor_callback(self, floor):
+    def make_door_callback(self, door_number):
         async def callback(interaction: discord.Interaction):
             if interaction.user != self.ctx.author:
                 return await interaction.response.send_message("Not your game!", ephemeral=True)
             if self.game_over:
                 return
-            if floor != self.current_floor + 1:
-                return await interaction.response.send_message(f"You must climb floor {self.current_floor + 1} first!", ephemeral=True)
-            
-            mines = self.get_mines_for_floor(floor)
-            survival_chance = self.get_survival_chance(floor)
-            is_safe = random.random() < survival_chance
-            
-            if not is_safe:
+            if door_number == self.mine_position:
                 self.game_over = True
                 await update_money(self.ctx.author.id, -self.bet)
-                await self.update_embed(interaction, crashed=True, crash_floor=floor)
+                await self.update_embed(interaction, crashed=True)
                 self.stop()
                 return
-            
-            self.current_floor = floor
-            
+            # Safe pick: advance floor
+            self.current_floor += 1
             if self.current_floor == self.max_floor:
                 winnings = self.get_cashout_value()
                 await update_money(self.ctx.author.id, winnings)
@@ -1225,13 +1217,14 @@ class TowerView(discord.ui.View):
                     color=0xf1c40f
                 )
                 embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
-                embed.add_field(name="Floors Climbed", value=f"{self.current_floor}/{self.max_floor}", inline=True)
+                embed.add_field(name="Floors Cleared", value=f"{self.current_floor}/{self.max_floor}", inline=True)
                 embed.add_field(name="Winnings", value=f"{format_number(winnings)} {self.emoji}", inline=True)
-                embed.add_field(name="🎉 CONGRATULATIONS!", value="You reached the top of the tower!", inline=False)
+                embed.add_field(name="🎉 CONGRATULATIONS!", value="You reached the top!", inline=False)
                 await interaction.response.edit_message(embed=embed, view=None)
                 self.game_over = True
                 self.stop()
             else:
+                self.add_floor_buttons()
                 await self.update_embed(interaction, crashed=False)
         return callback
 
@@ -1241,8 +1234,7 @@ class TowerView(discord.ui.View):
         if self.game_over:
             return
         if self.current_floor == 0:
-            return await interaction.response.send_message("❌ You must climb at least one floor before cashing out!", ephemeral=True)
-        
+            return await interaction.response.send_message("❌ You must clear at least one floor before cashing out!", ephemeral=True)
         winnings = self.get_cashout_value()
         await update_money(self.ctx.author.id, winnings)
         embed = discord.Embed(
@@ -1250,7 +1242,7 @@ class TowerView(discord.ui.View):
             color=0x2ecc71
         )
         embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
-        embed.add_field(name="Floors Climbed", value=f"{self.current_floor}/{self.max_floor}", inline=True)
+        embed.add_field(name="Floors Cleared", value=f"{self.current_floor}/{self.max_floor}", inline=True)
         embed.add_field(name="Cashed Out", value=f"{format_number(winnings)} {self.emoji}", inline=True)
         embed.add_field(name="✅ You cashed out!", value="Smart choice!", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -1267,24 +1259,21 @@ class TowerView(discord.ui.View):
 async def tower(ctx, amount_str: str):
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await update_money(ctx.author.id, -amount)
-    
-    view = TowerView(ctx, amount, emoji)
+    view = TowerDoorView(ctx, amount, emoji)
     embed = discord.Embed(
-        title=f"{ctx.author.display_name}'s Tower",
+        title=f"{ctx.author.display_name}'s Tower – Door Pick",
         color=0x2ecc71
     )
     embed.add_field(name="Bet", value=f"{format_number(amount)} {emoji}", inline=True)
     embed.add_field(name="Floor", value="0/???", inline=True)
-    embed.add_field(name="Cashout Value", value=f"{format_number(amount)} {emoji}", inline=True)
-    embed.set_footer(text="Click a floor number to climb higher. Cash out anytime! (8-12 random floors)")
-    
+    embed.add_field(name="💰 Cashout Value", value=f"{format_number(amount)} {emoji}", inline=True)
+    embed.add_field(name="Pick a Door", value="One door hides a 💣 mine. The other two are safe.", inline=False)
+    embed.set_footer(text="Each safe door increases your multiplier. Cash out anytime.")
     await ctx.send(embed=embed, view=view)
 
 # ---------- Roulette, HighLow, Dice, HorseRace ----------
@@ -1421,9 +1410,8 @@ async def horserace(ctx, amount_str: str, horse: str):
         await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} lost. You lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# SHOP, BUSINESS, RELATIONSHIP, LEADERBOARDS, OWNER COMMANDS
+# SHOP & BUSINESS COMMANDS (simplified but complete)
 # ==================================================
-# ---------- Shop Commands ----------
 @bot.command(name="createshop")
 @economy_check()
 async def create_shop(ctx, *, name: str):
@@ -1630,9 +1618,10 @@ async def sell_business(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Sold business for {format_number(value)}{emoji}.")
 
-# ---------- Relationship Commands (simplified but working) ----------
+# ==================================================
+# RELATIONSHIP COMMANDS
+# ==================================================
 async def is_family_member_local(user_id, target_id):
-    # reuse the helper above
     return await is_family_member(user_id, target_id)
 
 @bot.command(name="date")
@@ -1847,7 +1836,9 @@ async def pending(ctx):
             msg += f"`{rid}`: User {fid} - {rtype}\n"
     await ctx.send(msg)
 
-# ---------- Leaderboards ----------
+# ==================================================
+# LEADERBOARDS
+# ==================================================
 @bot.command(name="globalleaderboard", aliases=["glb"])
 @economy_check()
 async def glb(ctx, category: str = "money"):
@@ -1936,7 +1927,9 @@ async def level(ctx):
     bar = "█"*bar_len + "░"*(20-bar_len)
     await ctx.send(f"📊 **{ctx.author.display_name}**\nLevel: {lvl}\nXP: {format_number(xp)} / {format_number(next_xp)}\nProgress: `{bar}`\nNeeded: {format_number(needed)} XP")
 
-# ---------- Owner Commands (with non-negative deduction) ----------
+# ==================================================
+# OWNER COMMANDS
+# ==================================================
 @bot.command(name="addmoney")
 @owner_only()
 async def addmoney(ctx, user: discord.User, amount_str: str):
@@ -1955,11 +1948,10 @@ async def removemoney(ctx, user: discord.User, amount_str: str):
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    # Prevent going negative
     cur = await get_user(user.id)
     new_money = cur['money'] - amt
     if new_money < 0:
-        await update_money(user.id, -cur['money'])  # set to 0
+        await update_money(user.id, -cur['money'])
         await ctx.send(f"⚠️ {user.mention} only had {format_number(cur['money'])} coins. Removed all.")
     else:
         await update_money(user.id, -amt)
