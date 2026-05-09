@@ -4,7 +4,7 @@ import aiosqlite
 import json
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import os
 
 # ==================================================
@@ -21,7 +21,7 @@ intents.members = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 # ==================================================
-# REMOVE DEFAULT HELP COMMAND FIRST - THIS FIXES THE ERROR!
+# REMOVE DEFAULT HELP COMMAND
 # ==================================================
 bot.remove_command('help')
 
@@ -29,20 +29,26 @@ bot.remove_command('help')
 # HELPER FUNCTIONS
 # ==================================================
 def parse_amount(amount_str: str):
+    """Convert 1k, 2.5m, 1.2t, or 'all' to integer"""
     if amount_str.lower() == "all":
         return "all"
     amount_str = amount_str.lower().strip()
-    if amount_str.endswith('k'):
-        return int(float(amount_str[:-1]) * 1000)
-    elif amount_str.endswith('m'):
-        return int(float(amount_str[:-1]) * 1_000_000)
+    if amount_str.endswith('t'):
+        return int(float(amount_str[:-1]) * 1_000_000_000_000)
     elif amount_str.endswith('b'):
         return int(float(amount_str[:-1]) * 1_000_000_000)
+    elif amount_str.endswith('m'):
+        return int(float(amount_str[:-1]) * 1_000_000)
+    elif amount_str.endswith('k'):
+        return int(float(amount_str[:-1]) * 1000)
     else:
         return int(float(amount_str))
 
 def format_number(num: int) -> str:
-    if num >= 1_000_000_000:
+    """Format large numbers with k, m, b, t"""
+    if num >= 1_000_000_000_000:
+        return f"{num/1_000_000_000_000:.1f}t".replace('.0t', 't')
+    elif num >= 1_000_000_000:
         return f"{num/1_000_000_000:.1f}b".replace('.0b', 'b')
     elif num >= 1_000_000:
         return f"{num/1_000_000:.1f}m".replace('.0m', 'm')
@@ -140,7 +146,7 @@ async def init_db():
             crime_amount_min INTEGER DEFAULT 200,
             crime_amount_max INTEGER DEFAULT 800,
             interest_rate INTEGER DEFAULT 5,
-            max_withdraw INTEGER DEFAULT 50000,
+            max_withdraw INTEGER DEFAULT 999999999,
             loan_interest INTEGER DEFAULT 10,
             currency_emoji TEXT DEFAULT '💰'
         )''')
@@ -180,19 +186,19 @@ async def before_loan():
 @tasks.loop(hours=24)
 async def bank_interest():
     async with aiosqlite.connect("hakari.db") as db:
-        rate = 5
+        rate = await get_setting(0, "interest_rate") if bot.guilds else 5
         async with db.execute("SELECT user_id, bank, last_interest FROM users WHERE bank > 0") as cur:
             rows = await cur.fetchall()
         for uid, bank, last in rows:
             if last:
                 last_dt = datetime.fromisoformat(last)
-                if datetime.utcnow() - last_dt < timedelta(hours=20):
+                if datetime.now(timezone.utc) - last_dt < timedelta(hours=20):
                     continue
             earning = min(bank, 50000)
             interest = int(earning * rate / 100)
             if interest:
                 await db.execute("UPDATE users SET bank = bank + ?, last_interest = ? WHERE user_id = ?",
-                                 (interest, datetime.utcnow().isoformat(), uid))
+                                 (interest, datetime.now(timezone.utc).isoformat(), uid))
         await db.commit()
     print("✅ Bank interest added")
 
@@ -227,7 +233,7 @@ async def update_bank(user_id: int, amount: int):
 async def log_action(user_id: int, action: str, details: str = ""):
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("INSERT INTO logs (timestamp, user_id, action, details) VALUES (?, ?, ?, ?)",
-                         (datetime.utcnow().isoformat(), user_id, action, details))
+                         (datetime.now(timezone.utc).isoformat(), user_id, action, details))
         await db.commit()
 
 async def get_setting(guild_id: int, setting: str):
@@ -242,7 +248,7 @@ async def get_setting(guild_id: int, setting: str):
         "sleep_amount_min": 2000, "sleep_amount_max": 2500,
         "work_amount_min": 150, "work_amount_max": 300,
         "crime_amount_min": 200, "crime_amount_max": 800,
-        "interest_rate": 5, "max_withdraw": 50000,
+        "interest_rate": 5, "max_withdraw": 999999999,
         "loan_interest": 10, "currency_emoji": "💰"
     }
     return defaults.get(setting, 1)
@@ -290,7 +296,7 @@ async def get_bet_amount(ctx, amount_str, check_balance=True):
         try:
             amount = parse_amount(amount_str)
         except:
-            return None, "❌ Invalid amount. Use numbers like 500, 1k, 2.5m, or 'all'."
+            return None, "❌ Invalid amount. Use numbers like 500, 1k, 2.5m, 1.2t, or 'all'."
     if amount <= 0:
         return None, "❌ Amount must be positive."
     if check_balance and data[1] < amount:
@@ -493,9 +499,9 @@ async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
         discord.Embed(title="💰 Economy (1/6)", color=discord.Color.blue()).add_field(
-            name="Commands", value=f"`.bal` – balance\n`.daily` – {emoji}1500 (10 msg)\n`.work` – {emoji}150-300 (5m)\n`.sleep` – {emoji}2000-2500 (8h)\n`.crime` – {emoji}200-800 (15m)\n`.deposit <all/1k>`\n`.withdraw <all/1k>` (max 50k)\n`.pay @user <amount/all>`\n`.rob @user` (1h)\n`.interest`", inline=False),
+            name="Commands", value=f"`.bal` – balance\n`.daily` – {emoji}1500 (10 msg)\n`.work` – {emoji}150-300 (5m)\n`.sleep` – {emoji}2000-2500 (8h)\n`.crime` – {emoji}200-800 (15m)\n`.dep <all/1k>`\n`.with <all/1k>` (no limit)\n`.pay @user <amount/all>`\n`.rob @user` (1h)\n`.interest`", inline=False),
         discord.Embed(title="🏦 Loans (2/6)", color=discord.Color.purple()).add_field(
-            name="Commands", value="`.loan <amount>`\n`.repay <all/half/amount>`\n`.loaninfo`", inline=False),
+            name="Commands", value="`.loan <amount>` (max 50k)\n`.repay <all/half/amount>`\n`.loaninfo`", inline=False),
         discord.Embed(title="🎰 Gambling (3/6)", color=discord.Color.gold()).add_field(
             name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount> <floors>` (3‑12)", inline=False),
         discord.Embed(title="🛒 Shop & Business (4/6)", color=discord.Color.green()).add_field(
@@ -533,8 +539,8 @@ async def daily(ctx):
     data = await get_user(ctx.author.id)
     if data[8]:
         last = datetime.fromisoformat(data[8])
-        if datetime.utcnow() - last < timedelta(hours=24):
-            remain = timedelta(hours=24) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(hours=24):
+            remain = timedelta(hours=24) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Already claimed. Try again in {remain.seconds//3600}h.")
     needed = await get_setting(ctx.guild.id, "daily_messages_needed")
     if data[13] < needed:
@@ -542,7 +548,7 @@ async def daily(ctx):
     amount = await get_setting(ctx.guild.id, "daily_amount")
     await update_money(ctx.author.id, amount)
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET last_daily = ?, daily_messages = 0 WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET last_daily = ?, daily_messages = 0 WHERE user_id = ?", (datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Daily reward: +{format_number(amount)}{emoji}")
@@ -553,15 +559,15 @@ async def work(ctx):
     data = await get_user(ctx.author.id)
     if data[9]:
         last = datetime.fromisoformat(data[9])
-        if datetime.utcnow() - last < timedelta(minutes=5):
-            remain = timedelta(minutes=5) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(minutes=5):
+            remain = timedelta(minutes=5) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//60}m {remain.seconds%60}s.")
     min_amt = await get_setting(ctx.guild.id, "work_amount_min")
     max_amt = await get_setting(ctx.guild.id, "work_amount_max")
     earn = random.randint(min_amt, max_amt)
     await update_money(ctx.author.id, earn)
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET last_work = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET last_work = ? WHERE user_id = ?", (datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"💼 Worked and earned {format_number(earn)}{emoji}!")
@@ -572,15 +578,15 @@ async def sleep(ctx):
     data = await get_user(ctx.author.id)
     if data[11]:
         last = datetime.fromisoformat(data[11])
-        if datetime.utcnow() - last < timedelta(hours=8):
-            remain = timedelta(hours=8) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(hours=8):
+            remain = timedelta(hours=8) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"😴 Not tired. Try again in {remain.seconds//3600}h.")
     min_amt = await get_setting(ctx.guild.id, "sleep_amount_min")
     max_amt = await get_setting(ctx.guild.id, "sleep_amount_max")
     earn = random.randint(min_amt, max_amt)
     await update_money(ctx.author.id, earn)
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET last_sleep = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET last_sleep = ? WHERE user_id = ?", (datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"😴 You slept and woke up with {format_number(earn)}{emoji}!")
@@ -591,8 +597,8 @@ async def crime(ctx):
     data = await get_user(ctx.author.id)
     if data[12]:
         last = datetime.fromisoformat(data[12])
-        if datetime.utcnow() - last < timedelta(minutes=15):
-            remain = timedelta(minutes=15) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(minutes=15):
+            remain = timedelta(minutes=15) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//60}m.")
     crimes = [("Pickpocket", 0.7), ("Store robbery", 0.55), ("Bank heist", 0.4)]
     name, rate = random.choice(crimes)
@@ -612,10 +618,10 @@ async def crime(ctx):
         else:
             await ctx.send("🚔 Caught! You went to jail.")
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET last_crime = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET last_crime = ? WHERE user_id = ?", (datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
 
-@bot.command(name="deposit")
+@bot.command(name="deposit", aliases=["dep"])
 @economy_check()
 async def deposit(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
@@ -638,11 +644,9 @@ async def deposit(ctx, amount_str: str):
 @economy_check()
 async def withdraw(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
-    max_wd = await get_setting(ctx.guild.id, "max_withdraw")
+    # No withdraw limit – removed the max check
     if amount_str.lower() == "all":
-        amount = min(data[2], max_wd)
-        if data[2] > max_wd:
-            await ctx.send(f"⚠️ Max withdraw {format_number(max_wd)}. Withdrawing {format_number(amount)}.")
+        amount = data[2]
     else:
         try:
             amount = parse_amount(amount_str)
@@ -650,8 +654,6 @@ async def withdraw(ctx, amount_str: str):
             return await ctx.send("❌ Invalid amount.")
     if amount <= 0:
         return
-    if amount > max_wd:
-        return await ctx.send(f"❌ Max withdraw is {format_number(max_wd)} per transaction.")
     if amount > data[2]:
         return await ctx.send(f"❌ You have {format_number(data[2])} in bank.")
     async with aiosqlite.connect("hakari.db") as db:
@@ -701,8 +703,8 @@ async def rob(ctx, target: discord.User):
     data = await get_user(ctx.author.id)
     if data[10]:
         last = datetime.fromisoformat(data[10])
-        if datetime.utcnow() - last < timedelta(hours=1):
-            remain = timedelta(hours=1) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(hours=1):
+            remain = timedelta(hours=1) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//3600}h {(remain.seconds%3600)//60}m.")
     percent = random.uniform(1, 15)
     steal = int(tdata[1] * (percent / 100))
@@ -712,7 +714,7 @@ async def rob(ctx, target: discord.User):
     await update_money(ctx.author.id, steal)
     await ctx.send(f"✅ Robbed {target.mention} for {format_number(steal)}{emoji} ({percent:.1f}% of their wallet).")
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET last_rob = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET last_rob = ? WHERE user_id = ?", (datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
 
 @bot.command(name="interest")
@@ -730,7 +732,7 @@ async def interest(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# LOAN COMMANDS
+# LOAN COMMANDS (max 50k)
 # ==================================================
 @bot.command(name="loan")
 @economy_check()
@@ -741,21 +743,23 @@ async def loan(ctx, amount_str: str):
         return await ctx.send("❌ Invalid amount (e.g., 500, 1k).")
     if amount <= 0:
         return
+    if amount > 50000:
+        return await ctx.send("❌ Max loan is 50,000 coins per request.")
     data = await get_user(ctx.author.id)
     if data[22] > 0:
         return await ctx.send(f"❌ You already have a loan of {format_number(data[22])}. Repay first with `.repay all`.")
     if data[23]:
         last = datetime.fromisoformat(data[23])
-        if datetime.utcnow() - last < timedelta(hours=1):
-            remain = timedelta(hours=1) - (datetime.utcnow() - last)
+        if datetime.now(timezone.utc) - last < timedelta(hours=1):
+            remain = timedelta(hours=1) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ You just took a loan. Try again in {remain.seconds//60}m.")
     rate = await get_setting(ctx.guild.id, "loan_interest")
     await update_money(ctx.author.id, amount)
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET loan_amount = ?, loan_taken_at = ? WHERE user_id = ?", (amount, datetime.utcnow().isoformat(), ctx.author.id))
+        await db.execute("UPDATE users SET loan_amount = ?, loan_taken_at = ? WHERE user_id = ?", (amount, datetime.now(timezone.utc).isoformat(), ctx.author.id))
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    await ctx.send(f"🏦 Loan approved! +{format_number(amount)}{emoji}. Interest: {rate}% per hour. Repay with `.repay`")
+    await ctx.send(f"🏦 Loan approved! +{format_number(amount)}{emoji}. Interest: {rate}% per hour. Max loan 50k. Repay with `.repay`")
 
 @bot.command(name="repay")
 @economy_check()
@@ -801,13 +805,13 @@ async def loaninfo(ctx):
     if loan <= 0:
         embed = discord.Embed(title="🏦 Loan Status", color=discord.Color.green())
         embed.add_field(name="Active Loan", value="None", inline=False)
-        embed.add_field(name="How to get a loan", value="`.loan <amount>`", inline=False)
+        embed.add_field(name="How to get a loan", value="`.loan <amount>` (max 50k)", inline=False)
         await ctx.send(embed=embed)
     else:
         taken = data[23]
         if taken:
             taken_dt = datetime.fromisoformat(taken)
-            hours = (datetime.utcnow() - taken_dt).total_seconds() / 3600
+            hours = (datetime.now(timezone.utc) - taken_dt).total_seconds() / 3600
             total = int(loan * (1.10 ** hours))
         else:
             total = loan
@@ -829,7 +833,7 @@ class BlackjackView(discord.ui.View):
         self.dealer = dealer
         self.emoji = None
         self.ended = False
-        self.start = datetime.utcnow()
+        self.start = datetime.now(timezone.utc)
 
     def card_emoji(self, c):
         m = {2:"🃒",3:"🃓",4:"🃔",5:"🃕",6:"🃖",7:"🃗",8:"🃘",9:"🃙",10:"🃚",11:"🃑"}
@@ -844,7 +848,7 @@ class BlackjackView(discord.ui.View):
         return val
 
     async def embed_game(self):
-        remain = 120 - (datetime.utcnow() - self.start).total_seconds()
+        remain = 120 - (datetime.now(timezone.utc) - self.start).total_seconds()
         mins, secs = divmod(max(0, int(remain)), 60)
         pv = await self.hand_value(self.player)
         pstr = " ".join(self.card_emoji(c) for c in self.player)
@@ -946,7 +950,7 @@ async def blackjack(ctx, amount_str: str):
         await ctx.send(embed=embed, view=view)
 
 # ==================================================
-# MINES (fixed - requires at least 1 reveal to cashout)
+# MINES
 # ==================================================
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
@@ -960,7 +964,7 @@ class MinesView(discord.ui.View):
         self.mine_pos = set(random.sample(range(20), mines))
         self.safe_reveals = 0
         self.ended = False
-        self.start = datetime.utcnow()
+        self.start = datetime.now(timezone.utc)
         for i in range(20):
             btn = discord.ui.Button(label="⬛", style=discord.ButtonStyle.secondary, row=i//5, custom_id=f"m{i}")
             btn.callback = self.make_callback(i)
@@ -1004,7 +1008,7 @@ class MinesView(discord.ui.View):
                         child.style = discord.ButtonStyle.success
                         child.disabled = True
                         break
-                remain = 120 - (datetime.utcnow() - self.start).total_seconds()
+                remain = 120 - (datetime.now(timezone.utc) - self.start).total_seconds()
                 mins, secs = divmod(max(0, int(remain)), 60)
                 board = ""
                 for i in range(20):
@@ -1138,20 +1142,28 @@ async def crash(ctx, amount_str: str):
 @economy_check()
 async def tower(ctx, amount_str: str, floors: int = 5):
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
-        return
+        return await ctx.send("❌ Gambling disabled.")
     if floors < 3 or floors > 12:
-        return await ctx.send("❌ Floors must be 3‑12.")
+        return await ctx.send("❌ Floors must be between 3 and 12.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    mult = round(1.5 ** floors, 2)
-    if random.random() < (0.9 - floors*0.03):
-        win = int(amount * mult)
-        await update_money(ctx.author.id, win)
-        await ctx.send(f"🏗️ Tower ({floors} floors) – Reached top! Won {format_number(win)}{emoji}!")
+    multiplier = round(1.5 ** floors, 2)
+    # Win chance decreases with more floors (80% at 3 floors, ~54% at 12)
+    win_chance = max(0.3, 0.9 - (floors * 0.03))
+    win = random.random() < win_chance
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    
+    # Deduct bet first
+    await update_money(ctx.author.id, -amount)
+    
+    if win:
+        winnings = int(amount * multiplier)
+        await update_money(ctx.author.id, winnings)
+        await ctx.send(f"🏗️ Tower ({floors} floors) – You reached the top! Multiplier: **{multiplier}x** – Won {format_number(winnings)}{emoji}!")
     else:
-        await update_money(ctx.author.id, -amount)
-        await ctx.send(f"🏗️ CRASH at floor {random.randint(2,floors)}! Lost {format_number(amount)}{emoji}.")
+        fall_floor = random.randint(2, floors)
+        await ctx.send(f"🏗️ CRASH! You fell at floor **{fall_floor}** of {floors}. Lost {format_number(amount)}{emoji}.")
 
 # ==================================================
 # SHOP & BUSINESS
@@ -1272,6 +1284,7 @@ async def global_market(ctx):
             msg += f"• {name}\n"
     await ctx.send(msg)
 
+# Business commands
 @bot.command(name="buybusiness")
 @economy_check()
 async def buy_business(ctx, biz_type: str):
@@ -1288,7 +1301,7 @@ async def buy_business(ctx, biz_type: str):
                 return await ctx.send("❌ You already own a business.")
         await update_money(ctx.author.id, -cost)
         await db.execute("INSERT INTO businesses (user_id, business_type, level, last_collected) VALUES (?,?,?,?)",
-                         (ctx.author.id, biz_type.lower(), 1, datetime.utcnow().isoformat()))
+                         (ctx.author.id, biz_type.lower(), 1, datetime.now(timezone.utc).isoformat()))
         await db.commit()
     await ctx.send(f"✅ Bought a {biz_type} business!")
 
@@ -1331,7 +1344,7 @@ async def collect_profits(ctx):
     if not row:
         return
     lvl, last = row
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     last_dt = datetime.fromisoformat(last)
     hours = (now - last_dt).total_seconds() / 3600
     if hours < 1:
@@ -1362,7 +1375,7 @@ async def sell_business(ctx):
     await ctx.send(f"✅ Sold business for {format_number(value)}{emoji}.")
 
 # ==================================================
-# RELATIONSHIP COMMANDS
+# RELATIONSHIP COMMANDS (kept from previous working version)
 # ==================================================
 @bot.command(name="date")
 @economy_check()
@@ -1403,7 +1416,7 @@ async def marry(ctx, user: discord.User):
     await update_money(ctx.author.id, -5000)
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("INSERT INTO requests (from_id, to_id, request_type, timestamp) VALUES (?,?,?,?)",
-                         (ctx.author.id, user.id, "marriage", datetime.utcnow().isoformat()))
+                         (ctx.author.id, user.id, "marriage", datetime.now(timezone.utc).isoformat()))
         await db.commit()
         async with db.execute("SELECT last_insert_rowid()") as cur:
             rid = (await cur.fetchone())[0]
@@ -1494,7 +1507,7 @@ async def adopt(ctx, user: discord.User):
     await update_money(ctx.author.id, -2000)
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("INSERT INTO requests (from_id, to_id, request_type, timestamp) VALUES (?,?,?,?)",
-                         (ctx.author.id, user.id, "adopt", datetime.utcnow().isoformat()))
+                         (ctx.author.id, user.id, "adopt", datetime.now(timezone.utc).isoformat()))
         await db.commit()
         async with db.execute("SELECT last_insert_rowid()") as cur:
             rid = (await cur.fetchone())[0]
