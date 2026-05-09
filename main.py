@@ -433,7 +433,6 @@ class HelpView(discord.ui.View):
         try:
             await inter.edit_original_response(embed=self.pages[self.page], view=self)
         except discord.NotFound:
-            # The original message was deleted; stop the view
             self.stop()
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
@@ -839,7 +838,7 @@ async def loaninfo(ctx):
         await ctx.send(embed=embed)
 
 # ==================================================
-# GAMBLING GAMES (Blackjack, Mines, etc.)
+# GAMBLING GAMES
 # ==================================================
 # ---------- Blackjack ----------
 class BlackjackView(discord.ui.View):
@@ -2053,7 +2052,10 @@ async def on_message(message):
     if new_lvl:
         lvl_msg = await message.channel.send(f"🎉 {message.author.mention} leveled up to level {new_lvl}!")
         await asyncio.sleep(5)
-        await lvl_msg.delete()
+        try:
+            await lvl_msg.delete()
+        except discord.NotFound:
+            pass
     await bot.process_commands(message)
 
 @bot.event
@@ -2066,7 +2068,9 @@ async def on_command_error(ctx, error):
 # RUN BOT
 # ==================================================
 if __name__ == "__main__":
-    # Initialize database before bot starts to avoid "no such table" errors
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
-    bot.run(TOKEN)
+    # Initialize database before bot starts
+    async def main():
+        await init_db()
+        await bot.start(TOKEN)
+    
+    asyncio.run(main())
