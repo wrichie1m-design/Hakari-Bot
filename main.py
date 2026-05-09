@@ -55,33 +55,19 @@ def format_number(num: int) -> str:
     else:
         return str(num)
 
-async def is_family_member(user_id: int, target_id: int) -> bool:
-    user = await get_user(user_id)
-    target = await get_user(target_id)
-    if user[17] == target_id or target[17] == user_id:
-        return True
-    if user[18] == target_id or target[18] == user_id:
-        return True
-    async with aiosqlite.connect("hakari.db") as db:
-        async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (user_id, target_id)) as cur:
-            if await cur.fetchone():
-                return True
-        async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (target_id, user_id)) as cur:
-            if await cur.fetchone():
-                return True
-    return False
-
 # ==================================================
 # DATABASE SETUP
 # ==================================================
 async def init_db():
     async with aiosqlite.connect("hakari.db") as db:
+        # Owners table
         await db.execute('''CREATE TABLE IF NOT EXISTS owners (
             user_id INTEGER PRIMARY KEY,
             is_main INTEGER DEFAULT 0
         )''')
         await db.execute("INSERT OR IGNORE INTO owners (user_id, is_main) VALUES (?, 1)", (MAIN_OWNER_ID,))
 
+        # Users table (all columns)
         await db.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             money INTEGER DEFAULT 0,
@@ -205,18 +191,21 @@ async def before_bank():
     await bot.wait_until_ready()
 
 # ==================================================
-# DATABASE HELPERS
+# DATABASE HELPERS (using dictionary for clarity)
 # ==================================================
 async def get_user(user_id: int):
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur:
             row = await cur.fetchone()
             if row:
-                return row
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
             await db.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
             await db.commit()
             async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur2:
-                return await cur2.fetchone()
+                row2 = await cur2.fetchone()
+                columns2 = [desc[0] for desc in cur2.description]
+                return dict(zip(columns2, row2))
 
 async def update_money(user_id: int, amount: int):
     async with aiosqlite.connect("hakari.db") as db:
@@ -264,11 +253,11 @@ async def is_main_owner(user_id: int) -> bool:
 
 async def is_blacklisted(user_id: int) -> bool:
     u = await get_user(user_id)
-    return u[7] == 1
+    return u.get("blacklisted", 0) == 1
 
 async def is_protected(user_id: int) -> bool:
     u = await get_user(user_id)
-    return u[6] == 1
+    return u.get("protected", 0) == 1
 
 async def add_xp(user_id: int, amount: int):
     async with aiosqlite.connect("hakari.db") as db:
@@ -289,7 +278,7 @@ async def add_xp(user_id: int, amount: int):
 async def get_bet_amount(ctx, amount_str, check_balance=True):
     data = await get_user(ctx.author.id)
     if amount_str.lower() == "all":
-        amount = data[1]
+        amount = data["money"]
     else:
         try:
             amount = parse_amount(amount_str)
@@ -297,8 +286,8 @@ async def get_bet_amount(ctx, amount_str, check_balance=True):
             return None, "❌ Invalid amount. Use numbers like 500, 1k, 2.5m, 1.2t, or 'all'."
     if amount <= 0:
         return None, "❌ Amount must be positive."
-    if check_balance and data[1] < amount:
-        return None, f"❌ You only have {format_number(data[1])} coins."
+    if check_balance and data["money"] < amount:
+        return None, f"❌ You only have {format_number(data['money'])} coins."
     return amount, None
 
 def economy_check():
@@ -329,7 +318,7 @@ def main_owner_only():
     return commands.check(pred)
 
 # ==================================================
-# INTERACTIVE VIEWS
+# INTERACTIVE VIEWS (Payments, Requests)
 # ==================================================
 class PaymentConfirmView(discord.ui.View):
     def __init__(self, sender, recipient, amount, emoji):
@@ -347,7 +336,7 @@ class PaymentConfirmView(discord.ui.View):
         if self.completed:
             return
         sender_data = await get_user(self.sender.id)
-        if sender_data[1] < self.amount:
+        if sender_data["money"] < self.amount:
             await interaction.response.edit_message(content=f"❌ You no longer have enough coins.", view=None)
             self.completed = True
             return
@@ -420,7 +409,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# PAGINATED HELP MENUS (FIXED with defer)
+# PAGINATED HELP MENUS
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -495,7 +484,7 @@ class OwnerHelpView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# REGULAR COMMANDS MENU (.cmds)
+# HELP COMMANDS
 # ==================================================
 @bot.command(name="cmds", aliases=["commands"])
 async def help_cmd(ctx):
@@ -507,7 +496,7 @@ async def help_cmd(ctx):
         discord.Embed(title="🏦 Loans (2/6)", color=discord.Color.purple()).add_field(
             name="Commands", value="`.loan <amount>` (max 50k)\n`.repay <all/half/amount>`\n`.loaninfo`", inline=False),
         discord.Embed(title="🎰 Gambling (3/6)", color=discord.Color.gold()).add_field(
-            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount> <floors>` (3‑12)\n`.roulette <amount> <red/black/green/number>`\n`.highlow <amount> <h/l>`\n`.dice <amount> <1-6>`\n`.horserace <amount> <A/B/C/D>`", inline=False),
+            name="Games", value="`.cf <amount> [heads/tails]`\n`.slots <amount>`\n`.bj <amount>`\n`.crash <amount>`\n`.mines <amount> <mines>` (1‑19)\n`.tower <amount>` (8-12 floors, mines increase)\n`.roulette <amount> <red/black/green/number>`\n`.highlow <amount> <h/l>`\n`.dice <amount> <1-6>`\n`.horserace <amount> <A/B/C/D>`", inline=False),
         discord.Embed(title="🛒 Shop & Business (4/6)", color=discord.Color.green()).add_field(
             name="Commands", value="`.createshop <name>`\n`.addshopitem <price> <item>`\n`.removeshopitem <item>`\n`.myshop`\n`.visitshop @user`\n`.buyfromshop @user <item>`\n`.closeshop`\n`.globalmarket`\n`.buybusiness <type>`\n`.business`\n`.upgradebusiness`\n`.collectprofits`\n`.sellbusiness`", inline=False),
         discord.Embed(title="💕 Relationships (5/6)", color=discord.Color.pink()).add_field(
@@ -520,9 +509,6 @@ async def help_cmd(ctx):
             name="Commands", value="`.ccmds` – Show owner-only commands", inline=False))
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
 
-# ==================================================
-# OWNER-ONLY COMMANDS MENU (.ccmds)
-# ==================================================
 @bot.command(name="ccmds")
 @owner_only()
 async def owner_commands_cmd(ctx):
@@ -547,25 +533,25 @@ async def balance(ctx, user: discord.User = None):
     data = await get_user(target.id)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     embed = discord.Embed(title=f"{target.display_name}'s Balance", color=discord.Color.teal())
-    embed.add_field(name="Wallet", value=f"{format_number(data[1])}{emoji}", inline=True)
-    embed.add_field(name="Bank", value=f"{format_number(data[2])}{emoji}", inline=True)
-    embed.add_field(name="Total", value=f"{format_number(data[1]+data[2])}{emoji}", inline=True)
-    if data[22] > 0:
-        embed.add_field(name="⚠️ Loan", value=f"{format_number(data[22])}{emoji}", inline=True)
+    embed.add_field(name="Wallet", value=f"{format_number(data['money'])}{emoji}", inline=True)
+    embed.add_field(name="Bank", value=f"{format_number(data['bank'])}{emoji}", inline=True)
+    embed.add_field(name="Total", value=f"{format_number(data['money']+data['bank'])}{emoji}", inline=True)
+    if data.get('loan_amount', 0) > 0:
+        embed.add_field(name="⚠️ Loan", value=f"{format_number(data['loan_amount'])}{emoji}", inline=True)
     await ctx.send(embed=embed)
 
 @bot.command(name="daily")
 @economy_check()
 async def daily(ctx):
     data = await get_user(ctx.author.id)
-    if data[8]:
-        last = datetime.fromisoformat(data[8])
+    if data.get('last_daily'):
+        last = datetime.fromisoformat(data['last_daily'])
         if datetime.now(timezone.utc) - last < timedelta(hours=24):
             remain = timedelta(hours=24) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Already claimed. Try again in {remain.seconds//3600}h.")
     needed = await get_setting(ctx.guild.id, "daily_messages_needed")
-    if data[13] < needed:
-        return await ctx.send(f"❌ You need {needed - data[13]} more messages today.")
+    if data.get('daily_messages', 0) < needed:
+        return await ctx.send(f"❌ You need {needed - data['daily_messages']} more messages today.")
     amount = await get_setting(ctx.guild.id, "daily_amount")
     await update_money(ctx.author.id, amount)
     async with aiosqlite.connect("hakari.db") as db:
@@ -578,8 +564,8 @@ async def daily(ctx):
 @economy_check()
 async def work(ctx):
     data = await get_user(ctx.author.id)
-    if data[9]:
-        last = datetime.fromisoformat(data[9])
+    if data.get('last_work'):
+        last = datetime.fromisoformat(data['last_work'])
         if datetime.now(timezone.utc) - last < timedelta(minutes=5):
             remain = timedelta(minutes=5) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//60}m {remain.seconds%60}s.")
@@ -597,8 +583,8 @@ async def work(ctx):
 @economy_check()
 async def sleep(ctx):
     data = await get_user(ctx.author.id)
-    if data[11]:
-        last = datetime.fromisoformat(data[11])
+    if data.get('last_sleep'):
+        last = datetime.fromisoformat(data['last_sleep'])
         if datetime.now(timezone.utc) - last < timedelta(hours=8):
             remain = timedelta(hours=8) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"😴 Not tired. Try again in {remain.seconds//3600}h.")
@@ -616,8 +602,8 @@ async def sleep(ctx):
 @economy_check()
 async def crime(ctx):
     data = await get_user(ctx.author.id)
-    if data[12]:
-        last = datetime.fromisoformat(data[12])
+    if data.get('last_crime'):
+        last = datetime.fromisoformat(data['last_crime'])
         if datetime.now(timezone.utc) - last < timedelta(minutes=15):
             remain = timedelta(minutes=15) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//60}m.")
@@ -633,7 +619,7 @@ async def crime(ctx):
         await ctx.send(f"🦹 {name} successful! +{format_number(reward)}{emoji}!")
     else:
         fine = reward // 2
-        if data[1] >= fine:
+        if data['money'] >= fine:
             await update_money(ctx.author.id, -fine)
             await ctx.send(f"🚔 Caught! Lost {format_number(fine)}{emoji}.")
         else:
@@ -647,14 +633,14 @@ async def crime(ctx):
 async def deposit(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
     if amount_str.lower() == "all":
-        amount = data[1]
+        amount = data['money']
     else:
         try:
             amount = parse_amount(amount_str)
         except:
             return await ctx.send("❌ Invalid amount.")
-    if amount <= 0 or amount > data[1]:
-        return await ctx.send(f"❌ You have {format_number(data[1])} coins.")
+    if amount <= 0 or amount > data['money']:
+        return await ctx.send(f"❌ You have {format_number(data['money'])} coins.")
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("UPDATE users SET money = money - ?, bank = bank + ? WHERE user_id = ?", (amount, amount, ctx.author.id))
         await db.commit()
@@ -666,7 +652,7 @@ async def deposit(ctx, amount_str: str):
 async def withdraw(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
     if amount_str.lower() == "all":
-        amount = data[2]
+        amount = data['bank']
     else:
         try:
             amount = parse_amount(amount_str)
@@ -674,8 +660,8 @@ async def withdraw(ctx, amount_str: str):
             return await ctx.send("❌ Invalid amount.")
     if amount <= 0:
         return
-    if amount > data[2]:
-        return await ctx.send(f"❌ You have {format_number(data[2])} in bank.")
+    if amount > data['bank']:
+        return await ctx.send(f"❌ You have {format_number(data['bank'])} in bank.")
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("UPDATE users SET money = money + ?, bank = bank - ? WHERE user_id = ?", (amount, amount, ctx.author.id))
         await db.commit()
@@ -689,8 +675,7 @@ async def pay(ctx, target: discord.User, amount_str: str):
         return await ctx.send("❌ Can't pay yourself.")
     try:
         if amount_str.lower() == "all":
-            sdata = await get_user(ctx.author.id)
-            amount = sdata[1]
+            amount = (await get_user(ctx.author.id))['money']
         else:
             amount = parse_amount(amount_str)
     except:
@@ -698,8 +683,8 @@ async def pay(ctx, target: discord.User, amount_str: str):
     if amount <= 0:
         return await ctx.send("❌ Amount must be positive.")
     sender_data = await get_user(ctx.author.id)
-    if sender_data[1] < amount:
-        return await ctx.send(f"❌ You have {format_number(sender_data[1])} coins.")
+    if sender_data['money'] < amount:
+        return await ctx.send(f"❌ You have {format_number(sender_data['money'])} coins.")
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     view = PaymentConfirmView(ctx.author, target, amount, emoji)
     embed = discord.Embed(title="💸 Confirm Payment", color=discord.Color.blue())
@@ -718,17 +703,17 @@ async def rob(ctx, target: discord.User):
     if await is_protected(target.id):
         return await ctx.send(f"❌ {target.mention} is protected.")
     tdata = await get_user(target.id)
-    if tdata[1] < 100:
+    if tdata['money'] < 100:
         return await ctx.send(f"❌ {target.mention} is too poor.")
     data = await get_user(ctx.author.id)
-    if data[10]:
-        last = datetime.fromisoformat(data[10])
+    if data.get('last_rob'):
+        last = datetime.fromisoformat(data['last_rob'])
         if datetime.now(timezone.utc) - last < timedelta(hours=1):
             remain = timedelta(hours=1) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ Wait {remain.seconds//3600}h {(remain.seconds%3600)//60}m.")
     percent = random.uniform(1, 15)
-    steal = int(tdata[1] * (percent / 100))
-    steal = max(50, min(steal, tdata[1]))
+    steal = int(tdata['money'] * (percent / 100))
+    steal = max(50, min(steal, tdata['money']))
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await update_money(target.id, -steal)
     await update_money(ctx.author.id, steal)
@@ -742,7 +727,7 @@ async def rob(ctx, target: discord.User):
 async def interest(ctx):
     rate = await get_setting(ctx.guild.id, "interest_rate")
     data = await get_user(ctx.author.id)
-    bank = data[2]
+    bank = data['bank']
     earn = min(bank, 50000)
     daily = int(earn * rate / 100)
     embed = discord.Embed(title="🏦 Bank Interest", color=discord.Color.gold())
@@ -766,10 +751,10 @@ async def loan(ctx, amount_str: str):
     if amount > 50000:
         return await ctx.send("❌ Max loan is 50,000 coins per request.")
     data = await get_user(ctx.author.id)
-    if data[22] > 0:
-        return await ctx.send(f"❌ You already have a loan of {format_number(data[22])}. Repay first with `.repay all`.")
-    if data[23]:
-        last = datetime.fromisoformat(data[23])
+    if data['loan_amount'] > 0:
+        return await ctx.send(f"❌ You already have a loan of {format_number(data['loan_amount'])}. Repay first with `.repay all`.")
+    if data.get('loan_taken_at'):
+        last = datetime.fromisoformat(data['loan_taken_at'])
         if datetime.now(timezone.utc) - last < timedelta(hours=1):
             remain = timedelta(hours=1) - (datetime.now(timezone.utc) - last)
             return await ctx.send(f"⏰ You just took a loan. Try again in {remain.seconds//60}m.")
@@ -785,7 +770,7 @@ async def loan(ctx, amount_str: str):
 @economy_check()
 async def repay(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
-    loan = data[22]
+    loan = data['loan_amount']
     if loan <= 0:
         return await ctx.send("❌ No active loan.")
     if amount_str.lower() == "all":
@@ -799,8 +784,8 @@ async def repay(ctx, amount_str: str):
             return await ctx.send("❌ Invalid amount.")
     if amount <= 0:
         return
-    if data[1] < amount:
-        return await ctx.send(f"❌ You have {format_number(data[1])} coins.")
+    if data['money'] < amount:
+        return await ctx.send(f"❌ You have {format_number(data['money'])} coins.")
     new_loan = loan - amount
     if new_loan < 0:
         new_loan = 0
@@ -820,7 +805,7 @@ async def repay(ctx, amount_str: str):
 @economy_check()
 async def loaninfo(ctx):
     data = await get_user(ctx.author.id)
-    loan = data[22]
+    loan = data['loan_amount']
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     if loan <= 0:
         embed = discord.Embed(title="🏦 Loan Status", color=discord.Color.green())
@@ -828,7 +813,7 @@ async def loaninfo(ctx):
         embed.add_field(name="How to get a loan", value="`.loan <amount>` (max 50k)", inline=False)
         await ctx.send(embed=embed)
     else:
-        taken = data[23]
+        taken = data.get('loan_taken_at')
         if taken:
             taken_dt = datetime.fromisoformat(taken)
             hours = (datetime.now(timezone.utc) - taken_dt).total_seconds() / 3600
@@ -1078,7 +1063,7 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     await ctx.send(embed=embed, view=view)
     await update_money(ctx.author.id, -amount)
 
-# ---------- Coinflip, Slots, Crash, Tower ----------
+# ---------- Coinflip, Slots, Crash ----------
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
 async def coinflip(ctx, amount_str: str, choice: str = None):
@@ -1143,32 +1128,166 @@ async def crash(ctx, amount_str: str):
         await update_money(ctx.author.id, -amount)
         await ctx.send(f"💥 Crashed at {mult}x! Lost {format_number(amount)}{emoji}.")
 
+# ---------- Interactive Tower Game (8-12 floors, dynamic mines) ----------
+class TowerView(discord.ui.View):
+    def __init__(self, ctx, bet, emoji):
+        super().__init__(timeout=120)
+        self.ctx = ctx
+        self.bet = bet
+        self.emoji = emoji
+        self.current_floor = 0
+        self.max_floor = random.randint(8, 12)
+        self.game_over = False
+        self.start_time = datetime.now(timezone.utc)
+        
+        for i in range(1, self.max_floor + 1):
+            btn = discord.ui.Button(label=str(i), style=discord.ButtonStyle.secondary, row=(i-1)//4, custom_id=f"floor_{i}")
+            btn.callback = self.make_floor_callback(i)
+            self.add_item(btn)
+        
+        self.cashout_btn = discord.ui.Button(label="💰 Cash Out", style=discord.ButtonStyle.success, row=3)
+        self.cashout_btn.callback = self.cashout_callback
+        self.add_item(self.cashout_btn)
+
+    def get_mines_for_floor(self, floor):
+        if floor <= 3:
+            return 1
+        elif floor <= 7:
+            return 2
+        else:
+            return 3
+
+    def get_survival_chance(self, floor):
+        mines = self.get_mines_for_floor(floor)
+        base_chance = 0.95 - (floor * 0.01)
+        mine_penalty = 0.10 * (mines - 1)
+        return max(0.4, base_chance - mine_penalty)
+
+    def get_multiplier(self, floor):
+        return round(1.5 ** floor, 2)
+
+    def get_cashout_value(self):
+        if self.current_floor == 0:
+            return self.bet
+        return int(self.bet * self.get_multiplier(self.current_floor))
+
+    async def update_embed(self, interaction, crashed=False, crash_floor=None):
+        cashout_value = self.get_cashout_value()
+        embed = discord.Embed(
+            title=f"{self.ctx.author.display_name}'s Tower",
+            color=0x2ecc71 if not crashed else 0xe74c3c
+        )
+        embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
+        embed.add_field(name="Floor", value=f"{self.current_floor}/{self.max_floor}", inline=True)
+        embed.add_field(name="Cashout Value", value=f"{format_number(cashout_value)} {self.emoji}", inline=True)
+        
+        if self.current_floor < self.max_floor and not self.game_over:
+            next_floor = self.current_floor + 1
+            mines = self.get_mines_for_floor(next_floor)
+            mine_emoji = "💣" * mines
+            embed.add_field(name=f"Next Floor ({next_floor}) Danger", value=f"{mine_emoji} {mines} mine{'s' if mines > 1 else ''}", inline=False)
+        
+        if crashed:
+            embed.add_field(name="💥 CRASH!", value=f"You hit {self.get_mines_for_floor(crash_floor)} mine{'s' if self.get_mines_for_floor(crash_floor) > 1 else ''} at floor **{crash_floor}**! Lost {format_number(self.bet)}{self.emoji}.", inline=False)
+            embed.color = 0xe74c3c
+        else:
+            embed.set_footer(text=f"Click a floor number to climb higher. Cash out anytime! (Max floor: {self.max_floor})")
+        
+        await interaction.response.edit_message(embed=embed, view=self if not crashed else None)
+
+    def make_floor_callback(self, floor):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user != self.ctx.author:
+                return await interaction.response.send_message("Not your game!", ephemeral=True)
+            if self.game_over:
+                return
+            if floor != self.current_floor + 1:
+                return await interaction.response.send_message(f"You must climb floor {self.current_floor + 1} first!", ephemeral=True)
+            
+            mines = self.get_mines_for_floor(floor)
+            survival_chance = self.get_survival_chance(floor)
+            is_safe = random.random() < survival_chance
+            
+            if not is_safe:
+                self.game_over = True
+                await update_money(self.ctx.author.id, -self.bet)
+                await self.update_embed(interaction, crashed=True, crash_floor=floor)
+                self.stop()
+                return
+            
+            self.current_floor = floor
+            
+            if self.current_floor == self.max_floor:
+                winnings = self.get_cashout_value()
+                await update_money(self.ctx.author.id, winnings)
+                embed = discord.Embed(
+                    title=f"{self.ctx.author.display_name}'s Tower - COMPLETE!",
+                    color=0xf1c40f
+                )
+                embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
+                embed.add_field(name="Floors Climbed", value=f"{self.current_floor}/{self.max_floor}", inline=True)
+                embed.add_field(name="Winnings", value=f"{format_number(winnings)} {self.emoji}", inline=True)
+                embed.add_field(name="🎉 CONGRATULATIONS!", value="You reached the top of the tower!", inline=False)
+                await interaction.response.edit_message(embed=embed, view=None)
+                self.game_over = True
+                self.stop()
+            else:
+                await self.update_embed(interaction, crashed=False)
+        return callback
+
+    async def cashout_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("Not your game!", ephemeral=True)
+        if self.game_over:
+            return
+        if self.current_floor == 0:
+            return await interaction.response.send_message("❌ You must climb at least one floor before cashing out!", ephemeral=True)
+        
+        winnings = self.get_cashout_value()
+        await update_money(self.ctx.author.id, winnings)
+        embed = discord.Embed(
+            title=f"{self.ctx.author.display_name}'s Tower",
+            color=0x2ecc71
+        )
+        embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
+        embed.add_field(name="Floors Climbed", value=f"{self.current_floor}/{self.max_floor}", inline=True)
+        embed.add_field(name="Cashed Out", value=f"{format_number(winnings)} {self.emoji}", inline=True)
+        embed.add_field(name="✅ You cashed out!", value="Smart choice!", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.game_over = True
+        self.stop()
+
+    async def on_timeout(self):
+        if not self.game_over:
+            await update_money(self.ctx.author.id, -self.bet)
+            await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
+
 @bot.command(name="tower")
 @economy_check()
-async def tower(ctx, amount_str: str, floors: int = 5):
+async def tower(ctx, amount_str: str):
     if await get_setting(ctx.guild.id, "gambling_enabled") == 0:
         return await ctx.send("❌ Gambling disabled.")
-    if floors < 3 or floors > 12:
-        return await ctx.send("❌ Floors must be between 3 and 12.")
+    
     amount, err = await get_bet_amount(ctx, amount_str)
     if err:
         return await ctx.send(err)
-    multiplier = round(1.5 ** floors, 2)
-    win_chance = max(0.3, 0.9 - (floors * 0.03))
-    win = random.random() < win_chance
+    
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await update_money(ctx.author.id, -amount)
-    if win:
-        winnings = int(amount * multiplier)
-        await update_money(ctx.author.id, winnings)
-        await ctx.send(f"🏗️ Tower ({floors} floors) – You reached the top! Multiplier: **{multiplier}x** – Won {format_number(winnings)}{emoji}!")
-    else:
-        fall_floor = random.randint(2, floors)
-        await ctx.send(f"🏗️ CRASH! You fell at floor **{fall_floor}** of {floors}. Lost {format_number(amount)}{emoji}.")
+    
+    view = TowerView(ctx, amount, emoji)
+    embed = discord.Embed(
+        title=f"{ctx.author.display_name}'s Tower",
+        color=0x2ecc71
+    )
+    embed.add_field(name="Bet", value=f"{format_number(amount)} {emoji}", inline=True)
+    embed.add_field(name="Floor", value="0/???", inline=True)
+    embed.add_field(name="Cashout Value", value=f"{format_number(amount)} {emoji}", inline=True)
+    embed.set_footer(text="Click a floor number to climb higher. Cash out anytime! (8-12 random floors)")
+    
+    await ctx.send(embed=embed, view=view)
 
-# ==================================================
-# ROULETTE, HIGHLOW, DICE, HORSERACE
-# ==================================================
+# ---------- Roulette, HighLow, Dice, HorseRace ----------
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 async def roulette(ctx, amount_str: str, *, bet: str):
@@ -1180,30 +1299,35 @@ async def roulette(ctx, amount_str: str, *, bet: str):
     bet = bet.lower().strip()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     number = random.randint(0, 36)
-    color = "green" if number == 0 else ("red" if number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "black")
+    if number == 0:
+        color = "green"
+    elif number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]:
+        color = "red"
+    else:
+        color = "black"
     win = False
     payout = 0
     if bet.isdigit():
         if int(bet) == number:
             win, payout = True, amount * 35
-            result_msg = f"🎯 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
+            msg = f"🎯 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["red", "r"]:
         if color == "red":
             win, payout = True, amount * 2
-            result_msg = f"🔴 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
+            msg = f"🔴 The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["black", "b"]:
         if color == "black":
             win, payout = True, amount * 2
-            result_msg = f"⚫ The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
+            msg = f"⚫ The ball landed on **{number}** ({color})! You won {format_number(payout)}{emoji}!"
     elif bet in ["green", "g", "0"]:
         if number == 0:
             win, payout = True, amount * 14
-            result_msg = f"🟢 The ball landed on **0**! You won {format_number(payout)}{emoji}!"
+            msg = f"🟢 The ball landed on **0**! You won {format_number(payout)}{emoji}!"
     else:
         return await ctx.send("❌ Invalid bet! Choose: red, black, green, or a number 0-36")
     if win:
         await update_money(ctx.author.id, payout)
-        await ctx.send(result_msg)
+        await ctx.send(msg)
     else:
         await update_money(ctx.author.id, -amount)
         await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
@@ -1223,12 +1347,10 @@ async def highlow(ctx, amount_str: str, choice: str):
     values = [2,3,4,5,6,7,8,9,10,11,12,13,14]
     first = random.choice(values)
     second = random.choice(values)
-    is_higher = second > first
-    is_lower = second < first
-    if choice.lower() in ["h","higher"] and is_higher:
+    if choice.lower() in ["h","higher"] and second > first:
         await update_money(ctx.author.id, amount*2)
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
-    elif choice.lower() in ["l","lower"] and is_lower:
+    elif choice.lower() in ["l","lower"] and second < first:
         await update_money(ctx.author.id, amount*2)
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
     elif second == first:
@@ -1299,13 +1421,14 @@ async def horserace(ctx, amount_str: str, horse: str):
         await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} lost. You lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# SHOP & BUSINESS COMMANDS
+# SHOP, BUSINESS, RELATIONSHIP, LEADERBOARDS, OWNER COMMANDS
 # ==================================================
+# ---------- Shop Commands ----------
 @bot.command(name="createshop")
 @economy_check()
 async def create_shop(ctx, *, name: str):
     data = await get_user(ctx.author.id)
-    if data[14]:
+    if data.get('shop_name'):
         return await ctx.send("❌ You already have a shop.")
     if len(name) > 50:
         return await ctx.send("❌ Name too long.")
@@ -1320,11 +1443,11 @@ async def add_shop_item(ctx, price: int, *, item: str):
     if price <= 0:
         return
     data = await get_user(ctx.author.id)
-    if not data[14]:
+    if not data.get('shop_name'):
         return await ctx.send("❌ No shop.")
-    if not data[16]:
+    if not data.get('shop_open'):
         return await ctx.send("❌ Shop closed. Use `.closeshop` to open.")
-    items = json.loads(data[15]) if data[15] else {}
+    items = json.loads(data.get('shop_items', '{}'))
     if len(items) >= 20:
         return await ctx.send("❌ Shop full (20 items max).")
     items[item] = price
@@ -1338,9 +1461,9 @@ async def add_shop_item(ctx, price: int, *, item: str):
 @economy_check()
 async def remove_shop_item(ctx, *, item: str):
     data = await get_user(ctx.author.id)
-    if not data[14]:
+    if not data.get('shop_name'):
         return
-    items = json.loads(data[15]) if data[15] else {}
+    items = json.loads(data.get('shop_items', '{}'))
     if item not in items:
         return await ctx.send("❌ Item not found.")
     del items[item]
@@ -1353,12 +1476,12 @@ async def remove_shop_item(ctx, *, item: str):
 @economy_check()
 async def my_shop(ctx):
     data = await get_user(ctx.author.id)
-    if not data[14]:
+    if not data.get('shop_name'):
         return await ctx.send("❌ No shop.")
-    items = json.loads(data[15]) if data[15] else {}
-    status = "Open" if data[16] else "Closed"
+    items = json.loads(data.get('shop_items', '{}'))
+    status = "Open" if data.get('shop_open') else "Closed"
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    msg = f"🏪 **{data[14]}** ({status})\n\n"
+    msg = f"🏪 **{data['shop_name']}** ({status})\n\n"
     if items:
         for it, pr in items.items():
             msg += f"• {it}: {format_number(pr)}{emoji}\n"
@@ -1370,9 +1493,9 @@ async def my_shop(ctx):
 @economy_check()
 async def close_shop(ctx):
     data = await get_user(ctx.author.id)
-    if not data[14]:
+    if not data.get('shop_name'):
         return
-    new = 0 if data[16] else 1
+    new = 0 if data.get('shop_open') else 1
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("UPDATE users SET shop_open = ? WHERE user_id = ?", (new, ctx.author.id))
         await db.commit()
@@ -1382,14 +1505,14 @@ async def close_shop(ctx):
 @economy_check()
 async def buy_from_shop(ctx, seller: discord.User, *, item: str):
     sdata = await get_user(seller.id)
-    if not sdata[14] or not sdata[16]:
+    if not sdata.get('shop_name') or not sdata.get('shop_open'):
         return await ctx.send(f"❌ {seller.display_name}'s shop is not open.")
-    items = json.loads(sdata[15]) if sdata[15] else {}
+    items = json.loads(sdata.get('shop_items', '{}'))
     if item not in items:
         return await ctx.send("❌ Item not found.")
     price = items[item]
     bdata = await get_user(ctx.author.id)
-    if bdata[1] < price:
+    if bdata['money'] < price:
         return await ctx.send(f"❌ You need {format_number(price)} coins.")
     await update_money(ctx.author.id, -price)
     await update_money(seller.id, price)
@@ -1404,7 +1527,7 @@ async def buy_from_shop(ctx, seller: discord.User, *, item: str):
 @economy_check()
 async def global_market(ctx):
     async with aiosqlite.connect("hakari.db") as db:
-        async with db.execute("SELECT user_id, shop_name FROM users WHERE shop_open=1 AND shop_name IS NOT NULL LIMIT 20") as cur:
+        async with db.execute("SELECT user_id, shop_name FROM users WHERE shop_open = 1 AND shop_name IS NOT NULL LIMIT 20") as cur:
             shops = await cur.fetchall()
     if not shops:
         return await ctx.send("No open shops.")
@@ -1417,7 +1540,7 @@ async def global_market(ctx):
             msg += f"• {name}\n"
     await ctx.send(msg)
 
-# ---- Business commands ----
+# ---------- Business Commands ----------
 @bot.command(name="buybusiness")
 @economy_check()
 async def buy_business(ctx, biz_type: str):
@@ -1426,7 +1549,7 @@ async def buy_business(ctx, biz_type: str):
         return await ctx.send(f"❌ Choose from: {', '.join(types)}")
     data = await get_user(ctx.author.id)
     cost = 1000
-    if data[1] < cost:
+    if data['money'] < cost:
         return await ctx.send(f"❌ Need {format_number(cost)} coins.")
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT 1 FROM businesses WHERE user_id=?", (ctx.author.id,)) as cur:
@@ -1460,7 +1583,7 @@ async def upgrade_business(ctx):
     lvl = row[0]
     cost = 500 * lvl
     data = await get_user(ctx.author.id)
-    if data[1] < cost:
+    if data['money'] < cost:
         return await ctx.send(f"❌ Upgrade costs {format_number(cost)} coins.")
     await update_money(ctx.author.id, -cost)
     async with aiosqlite.connect("hakari.db") as db:
@@ -1507,20 +1630,22 @@ async def sell_business(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Sold business for {format_number(value)}{emoji}.")
 
-# ==================================================
-# RELATIONSHIP COMMANDS
-# ==================================================
+# ---------- Relationship Commands (simplified but working) ----------
+async def is_family_member_local(user_id, target_id):
+    # reuse the helper above
+    return await is_family_member(user_id, target_id)
+
 @bot.command(name="date")
 @economy_check()
 async def date(ctx, user: discord.User):
     if user == ctx.author:
         return await ctx.send("❌ Can't date yourself.")
-    if await is_family_member(ctx.author.id, user.id):
+    if await is_family_member_local(ctx.author.id, user.id):
         return await ctx.send("❌ You cannot date a family member.")
     data = await get_user(ctx.author.id)
-    if data[17]:
+    if data.get('spouse_id'):
         return await ctx.send("❌ You are already married. Divorce first.")
-    if data[1] < 500:
+    if data['money'] < 500:
         return await ctx.send("❌ Need 500 coins for a date.")
     await update_money(ctx.author.id, -500)
     gain = random.randint(50,150)
@@ -1534,17 +1659,17 @@ async def date(ctx, user: discord.User):
 async def marry(ctx, user: discord.User):
     if user == ctx.author:
         return await ctx.send("❌ Can't marry yourself.")
-    if await is_family_member(ctx.author.id, user.id):
+    if await is_family_member_local(ctx.author.id, user.id):
         return await ctx.send("❌ Cannot marry a family member.")
     data = await get_user(ctx.author.id)
-    if data[17]:
+    if data.get('spouse_id'):
         return await ctx.send("❌ Already married.")
     target = await get_user(user.id)
-    if target[17]:
+    if target.get('spouse_id'):
         return await ctx.send(f"❌ {user.mention} is already married.")
-    if data[1] < 5000:
+    if data['money'] < 5000:
         return await ctx.send("❌ Need 5000 coins.")
-    if target[19] < 1000:
+    if target.get('affection', 0) < 1000:
         return await ctx.send(f"❌ Need 1000 affection with {user.mention}.")
     await update_money(ctx.author.id, -5000)
     async with aiosqlite.connect("hakari.db") as db:
@@ -1563,10 +1688,10 @@ async def marry(ctx, user: discord.User):
 @economy_check()
 async def divorce(ctx):
     data = await get_user(ctx.author.id)
-    spouse = data[17]
+    spouse = data.get('spouse_id')
     if not spouse:
         return await ctx.send("❌ Not married.")
-    if data[1] < 2500:
+    if data['money'] < 2500:
         return await ctx.send("❌ Need 2500 coins for divorce.")
     await update_money(ctx.author.id, -2500)
     async with aiosqlite.connect("hakari.db") as db:
@@ -1581,7 +1706,7 @@ async def divorce(ctx):
 async def affection(ctx, user: discord.User = None):
     target = user or ctx.author
     data = await get_user(target.id)
-    aff = data[19]
+    aff = data.get('affection', 0)
     if aff >= 5000:
         level = "👑 Eternal Bond"
     elif aff >= 3500:
@@ -1611,8 +1736,8 @@ async def gift(ctx, user: discord.User, amount_str: str):
     if amount <= 0 or user == ctx.author:
         return
     data = await get_user(ctx.author.id)
-    if data[1] < amount:
-        return await ctx.send(f"❌ You have {format_number(data[1])} coins.")
+    if data['money'] < amount:
+        return await ctx.send(f"❌ You have {format_number(data['money'])} coins.")
     await update_money(ctx.author.id, -amount)
     await update_money(user.id, amount)
     gain = amount // 100
@@ -1632,10 +1757,10 @@ async def adopt(ctx, user: discord.User):
     if user == ctx.author:
         return await ctx.send("❌ Can't adopt yourself.")
     data = await get_user(ctx.author.id)
-    if data[1] < 2000:
+    if data['money'] < 2000:
         return await ctx.send("❌ Need 2000 coins.")
     target = await get_user(user.id)
-    if target[18]:
+    if target.get('parent_id'):
         return await ctx.send(f"❌ {user.mention} already has a parent.")
     await update_money(ctx.author.id, -2000)
     async with aiosqlite.connect("hakari.db") as db:
@@ -1671,8 +1796,8 @@ async def children(ctx):
 @economy_check()
 async def family(ctx):
     data = await get_user(ctx.author.id)
-    spouse = data[17]
-    parent = data[18]
+    spouse = data.get('spouse_id')
+    parent = data.get('parent_id')
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT child_id FROM children WHERE parent_id=?", (ctx.author.id,)) as cur:
             kids = await cur.fetchall()
@@ -1722,9 +1847,7 @@ async def pending(ctx):
             msg += f"`{rid}`: User {fid} - {rtype}\n"
     await ctx.send(msg)
 
-# ==================================================
-# LEADERBOARDS
-# ==================================================
+# ---------- Leaderboards ----------
 @bot.command(name="globalleaderboard", aliases=["glb"])
 @economy_check()
 async def glb(ctx, category: str = "money"):
@@ -1767,7 +1890,7 @@ async def slb(ctx, category: str = "money"):
                 if category=="money":
                     data.append((m, row[0]+row[1]))
                 else:
-                    data.append((m, row[4]))
+                    data.append((m, row[2]))  # total_xp
     data.sort(key=lambda x: x[1], reverse=True)
     top = data[:10]
     if not top:
@@ -1801,8 +1924,8 @@ async def top_couples(ctx):
 @economy_check()
 async def level(ctx):
     data = await get_user(ctx.author.id)
-    lvl = data[4]
-    xp = data[5]
+    lvl = data.get('level', 0)
+    xp = data.get('total_xp', 0)
     next_xp = ((lvl+1)**2)*100
     needed = next_xp - xp
     if lvl == 0:
@@ -1813,9 +1936,7 @@ async def level(ctx):
     bar = "█"*bar_len + "░"*(20-bar_len)
     await ctx.send(f"📊 **{ctx.author.display_name}**\nLevel: {lvl}\nXP: {format_number(xp)} / {format_number(next_xp)}\nProgress: `{bar}`\nNeeded: {format_number(needed)} XP")
 
-# ==================================================
-# OWNER COMMANDS
-# ==================================================
+# ---------- Owner Commands (with non-negative deduction) ----------
 @bot.command(name="addmoney")
 @owner_only()
 async def addmoney(ctx, user: discord.User, amount_str: str):
@@ -1834,9 +1955,15 @@ async def removemoney(ctx, user: discord.User, amount_str: str):
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    await update_money(user.id, -amt)
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}.")
+    # Prevent going negative
+    cur = await get_user(user.id)
+    new_money = cur['money'] - amt
+    if new_money < 0:
+        await update_money(user.id, -cur['money'])  # set to 0
+        await ctx.send(f"⚠️ {user.mention} only had {format_number(cur['money'])} coins. Removed all.")
+    else:
+        await update_money(user.id, -amt)
+        await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}.")
 
 @bot.command(name="setmoney")
 @owner_only()
@@ -1869,9 +1996,14 @@ async def removebank(ctx, user: discord.User, amount_str: str):
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    await update_bank(user.id, -amt)
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
+    cur = await get_user(user.id)
+    new_bank = cur['bank'] - amt
+    if new_bank < 0:
+        await update_bank(user.id, -cur['bank'])
+        await ctx.send(f"⚠️ {user.mention} only had {format_number(cur['bank'])} in bank. Removed all.")
+    else:
+        await update_bank(user.id, -amt)
+        await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
 
 @bot.command(name="addowner")
 @owner_only()
