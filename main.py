@@ -21,7 +21,7 @@ intents.members = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 # ==================================================
-# REMOVE DEFAULT HELP COMMAND
+# REMOVE DEFAULT HELP
 # ==================================================
 bot.remove_command('help')
 
@@ -29,7 +29,6 @@ bot.remove_command('help')
 # HELPER FUNCTIONS
 # ==================================================
 def parse_amount(amount_str: str):
-    """Convert 1k, 2.5m, 1.2t, or 'all' to integer"""
     if amount_str.lower() == "all":
         return "all"
     amount_str = amount_str.lower().strip()
@@ -45,7 +44,6 @@ def parse_amount(amount_str: str):
         return int(float(amount_str))
 
 def format_number(num: int) -> str:
-    """Format large numbers with k, m, b, t"""
     if num >= 1_000_000_000_000:
         return f"{num/1_000_000_000_000:.1f}t".replace('.0t', 't')
     elif num >= 1_000_000_000:
@@ -60,9 +58,9 @@ def format_number(num: int) -> str:
 async def is_family_member(user_id: int, target_id: int) -> bool:
     user = await get_user(user_id)
     target = await get_user(target_id)
-    if user[17] == target_id or target[17] == user_id:
+    if user[17] == target_id or target[17] == user_id:   # spouse
         return True
-    if user[18] == target_id or target[18] == user_id:
+    if user[18] == target_id or target[18] == user_id:   # parent
         return True
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute("SELECT 1 FROM children WHERE parent_id=? AND child_id=?", (user_id, target_id)) as cur:
@@ -166,7 +164,7 @@ async def init_db():
     print("✅ Database ready.")
 
 # ==================================================
-# BACKGROUND TASKS
+# BACKGROUND INTEREST TASKS
 # ==================================================
 @tasks.loop(hours=1)
 async def loan_interest():
@@ -207,7 +205,7 @@ async def before_bank():
     await bot.wait_until_ready()
 
 # ==================================================
-# DATABASE ACCESS HELPERS
+# DATABASE HELPERS
 # ==================================================
 async def get_user(user_id: int):
     async with aiosqlite.connect("hakari.db") as db:
@@ -331,7 +329,7 @@ def main_owner_only():
     return commands.check(pred)
 
 # ==================================================
-# INTERACTIVE VIEWS
+# INTERACTIVE VIEWS (Payments & Requests)
 # ==================================================
 class PaymentConfirmView(discord.ui.View):
     def __init__(self, sender, recipient, amount, emoji):
@@ -461,7 +459,7 @@ class RequestView(discord.ui.View):
         self.stop()
 
 # ==================================================
-# HELP MENU
+# PAGINATED HELP MENUS
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -493,6 +491,39 @@ class HelpView(discord.ui.View):
             return await inter.response.send_message("Not your menu!", ephemeral=True)
         await inter.message.delete()
 
+class OwnerHelpView(discord.ui.View):
+    def __init__(self, ctx, pages):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.pages = pages
+        self.page = 0
+
+    async def update(self, inter):
+        await inter.response.edit_message(embed=self.pages[self.page], view=self)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
+    async def prev(self, inter, btn):
+        if inter.user != self.ctx.author:
+            return await inter.response.send_message("Not your menu!", ephemeral=True)
+        self.page = (self.page - 1) % len(self.pages)
+        await self.update(inter)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
+    async def nxt(self, inter, btn):
+        if inter.user != self.ctx.author:
+            return await inter.response.send_message("Not your menu!", ephemeral=True)
+        self.page = (self.page + 1) % len(self.pages)
+        await self.update(inter)
+
+    @discord.ui.button(label="❌", style=discord.ButtonStyle.danger)
+    async def close(self, inter, btn):
+        if inter.user != self.ctx.author:
+            return await inter.response.send_message("Not your menu!", ephemeral=True)
+        await inter.message.delete()
+
+# ==================================================
+# REGULAR COMMANDS MENU (.cmds)
+# ==================================================
 @bot.command(name="cmds", aliases=["commands"])
 async def help_cmd(ctx):
     owner = await is_owner(ctx.author.id)
@@ -513,8 +544,45 @@ async def help_cmd(ctx):
     ]
     if owner:
         pages.append(discord.Embed(title="👑 Owner (7/7)", color=discord.Color.red()).add_field(
-            name="Commands", value="`.addowner <id>`\n`.removeowner <id>`\n`.ownerlist`\n`.addmoney @user <amount>`\n`.removemoney @user <amount>`\n`.setmoney @user <amount>`\n`.addbank @user <amount>`\n`.removebank @user <amount>`\n`.protect @user`\n`.unprotect @user`\n`.blacklist @user`\n`.whitelist @user`\n`.economywipe`\n`.toggleeconomy` / `.togglerob` / `.togglegambling`\n`.setdailyamount`\n`.setcurrency`\n`.logs`", inline=False))
+            name="Commands", value="`.ccmds` – Show owner-only commands", inline=False))
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
+
+# ==================================================
+# OWNER-ONLY COMMANDS MENU (.ccmds)
+# ==================================================
+@bot.command(name="ccmds")
+@owner_only()
+async def owner_commands_cmd(ctx):
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    pages = [
+        discord.Embed(title="👑 Owner Commands (1/2)", color=discord.Color.red()).add_field(
+            name="Economy Management",
+            value="`.addmoney @user <amount>` – Add coins to wallet\n"
+                  "`.removemoney @user <amount>` – Remove coins from wallet\n"
+                  "`.setmoney @user <amount>` – Set wallet balance\n"
+                  "`.addbank @user <amount>` – Add coins to bank\n"
+                  "`.removebank @user <amount>` – Remove coins from bank\n"
+                  "`.economywipe` – Reset all money & bank to 0\n"
+                  "`.toggleeconomy` – Enable/disable economy commands\n"
+                  "`.togglerob` – Enable/disable rob command\n"
+                  "`.togglegambling` – Enable/disable gambling\n"
+                  "`.setdailyamount <amount>` – Set daily reward\n"
+                  "`.setcurrency <emoji>` – Change currency symbol",
+            inline=False),
+        discord.Embed(title="👑 Owner Commands (2/2)", color=discord.Color.red()).add_field(
+            name="Protection & Logs",
+            value="`.protect @user` – Prevent user from being robbed\n"
+                  "`.unprotect @user` – Remove protection\n"
+                  "`.blacklist @user` – Ban user from bot\n"
+                  "`.whitelist @user` – Unban user\n"
+                  "`.logs [limit]` – View bot logs\n\n"
+                  "**Owner Management**\n"
+                  "`.addowner <user_id>` – Add new owner\n"
+                  "`.removeowner <user_id>` – Remove owner\n"
+                  "`.ownerlist` – List all owners",
+            inline=False)
+    ]
+    await ctx.send(embed=pages[0], view=OwnerHelpView(ctx, pages))
 
 # ==================================================
 # ECONOMY COMMANDS
@@ -644,7 +712,6 @@ async def deposit(ctx, amount_str: str):
 @economy_check()
 async def withdraw(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
-    # No withdraw limit – removed the max check
     if amount_str.lower() == "all":
         amount = data[2]
     else:
@@ -732,7 +799,7 @@ async def interest(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# LOAN COMMANDS (max 50k)
+# LOAN COMMANDS
 # ==================================================
 @bot.command(name="loan")
 @economy_check()
@@ -822,8 +889,9 @@ async def loaninfo(ctx):
         await ctx.send(embed=embed)
 
 # ==================================================
-# BLACKJACK
+# GAMBLING GAMES
 # ==================================================
+# --- Blackjack ---
 class BlackjackView(discord.ui.View):
     def __init__(self, ctx, bet, player, dealer):
         super().__init__(timeout=120)
@@ -949,9 +1017,7 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# ==================================================
-# MINES
-# ==================================================
+# --- Mines ---
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
         super().__init__(timeout=120)
@@ -1071,9 +1137,7 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     await ctx.send(embed=embed, view=view)
     await update_money(ctx.author.id, -amount)
 
-# ==================================================
-# OTHER GAMBLING
-# ==================================================
+# --- Other gambling ---
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
 async def coinflip(ctx, amount_str: str, choice: str = None):
@@ -1149,14 +1213,11 @@ async def tower(ctx, amount_str: str, floors: int = 5):
     if err:
         return await ctx.send(err)
     multiplier = round(1.5 ** floors, 2)
-    # Win chance decreases with more floors (80% at 3 floors, ~54% at 12)
     win_chance = max(0.3, 0.9 - (floors * 0.03))
     win = random.random() < win_chance
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    
-    # Deduct bet first
+
     await update_money(ctx.author.id, -amount)
-    
     if win:
         winnings = int(amount * multiplier)
         await update_money(ctx.author.id, winnings)
@@ -1166,7 +1227,7 @@ async def tower(ctx, amount_str: str, floors: int = 5):
         await ctx.send(f"🏗️ CRASH! You fell at floor **{fall_floor}** of {floors}. Lost {format_number(amount)}{emoji}.")
 
 # ==================================================
-# SHOP & BUSINESS
+# SHOP & BUSINESS COMMANDS
 # ==================================================
 @bot.command(name="createshop")
 @economy_check()
@@ -1284,7 +1345,6 @@ async def global_market(ctx):
             msg += f"• {name}\n"
     await ctx.send(msg)
 
-# Business commands
 @bot.command(name="buybusiness")
 @economy_check()
 async def buy_business(ctx, biz_type: str):
@@ -1375,7 +1435,7 @@ async def sell_business(ctx):
     await ctx.send(f"✅ Sold business for {format_number(value)}{emoji}.")
 
 # ==================================================
-# RELATIONSHIP COMMANDS (kept from previous working version)
+# RELATIONSHIP COMMANDS
 # ==================================================
 @bot.command(name="date")
 @economy_check()
