@@ -957,7 +957,7 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# ---------- Mines ----------
+# ---------- Mines (quit button removed) ----------
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
         super().__init__(timeout=120)
@@ -978,9 +978,7 @@ class MinesView(discord.ui.View):
         self.cashout = discord.ui.Button(label="💰 Cashout", style=discord.ButtonStyle.success, row=4)
         self.cashout.callback = self.cashout_cb
         self.add_item(self.cashout)
-        self.quit = discord.ui.Button(label="❌ Quit", style=discord.ButtonStyle.danger, row=4)
-        self.quit.callback = self.quit_cb
-        self.add_item(self.quit)
+        # Quit button removed
 
     def make_callback(self, pos):
         async def cb(inter):
@@ -1041,15 +1039,9 @@ class MinesView(discord.ui.View):
         self.ended = True
         self.stop()
 
-    async def quit_cb(self, inter):
-        if inter.user != self.ctx.author or self.ended:
-            return
-        await inter.response.edit_message(content=f"❌ You quit. Lost {format_number(self.bet)}{self.emoji}.", view=None)
-        self.ended = True
-        self.stop()
-
     async def on_timeout(self):
         if not self.ended:
+            await update_money(self.ctx.author.id, -self.bet)
             await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
 
 @bot.command(name="mines")
@@ -1157,7 +1149,6 @@ class TowerDoorView(discord.ui.View):
         self.add_floor_buttons()
 
     def add_floor_buttons(self):
-        """Remove old door buttons and add new set for the current floor."""
         for child in self.children[:]:
             if isinstance(child, discord.ui.Button) and child.custom_id and child.custom_id.startswith("door_"):
                 self.remove_item(child)
@@ -1207,7 +1198,6 @@ class TowerDoorView(discord.ui.View):
                 await self.update_embed(interaction, crashed=True)
                 self.stop()
                 return
-            # Safe pick: advance floor
             self.current_floor += 1
             if self.current_floor == self.max_floor:
                 winnings = self.get_cashout_value()
@@ -1621,15 +1611,12 @@ async def sell_business(ctx):
 # ==================================================
 # RELATIONSHIP COMMANDS
 # ==================================================
-async def is_family_member_local(user_id, target_id):
-    return await is_family_member(user_id, target_id)
-
 @bot.command(name="date")
 @economy_check()
 async def date(ctx, user: discord.User):
     if user == ctx.author:
         return await ctx.send("❌ Can't date yourself.")
-    if await is_family_member_local(ctx.author.id, user.id):
+    if await is_family_member(ctx.author.id, user.id):
         return await ctx.send("❌ You cannot date a family member.")
     data = await get_user(ctx.author.id)
     if data.get('spouse_id'):
@@ -1648,7 +1635,7 @@ async def date(ctx, user: discord.User):
 async def marry(ctx, user: discord.User):
     if user == ctx.author:
         return await ctx.send("❌ Can't marry yourself.")
-    if await is_family_member_local(ctx.author.id, user.id):
+    if await is_family_member(ctx.author.id, user.id):
         return await ctx.send("❌ Cannot marry a family member.")
     data = await get_user(ctx.author.id)
     if data.get('spouse_id'):
@@ -1881,7 +1868,7 @@ async def slb(ctx, category: str = "money"):
                 if category=="money":
                     data.append((m, row[0]+row[1]))
                 else:
-                    data.append((m, row[2]))  # total_xp
+                    data.append((m, row[2]))
     data.sort(key=lambda x: x[1], reverse=True)
     top = data[:10]
     if not top:
@@ -1949,13 +1936,27 @@ async def removemoney(ctx, user: discord.User, amount_str: str):
     except:
         return await ctx.send("Invalid amount.")
     cur = await get_user(user.id)
-    new_money = cur['money'] - amt
-    if new_money < 0:
-        await update_money(user.id, -cur['money'])
-        await ctx.send(f"⚠️ {user.mention} only had {format_number(cur['money'])} coins. Removed all.")
+    wallet = cur['money']
+    bank = cur['bank']
+    total = wallet + bank
+    if total == 0:
+        await ctx.send(f"⚠️ {user.mention} has 0 coins total. Nothing to remove.")
+        return
+    if amt > total:
+        await update_money(user.id, -wallet)
+        await update_bank(user.id, -bank)
+        await ctx.send(f"⚠️ {user.mention} only had {format_number(total)} coins total. Removed all.")
     else:
-        await update_money(user.id, -amt)
-        await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}.")
+        if wallet >= amt:
+            await update_money(user.id, -amt)
+            removed_from = "wallet"
+        else:
+            await update_money(user.id, -wallet)
+            remaining = amt - wallet
+            await update_bank(user.id, -remaining)
+            removed_from = f"wallet ({format_number(wallet)}) and bank ({format_number(remaining)})"
+        emoji = await get_setting(ctx.guild.id, "currency_emoji")
+        await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention} (from {removed_from}).")
 
 @bot.command(name="setmoney")
 @owner_only()
@@ -1968,7 +1969,7 @@ async def setmoney(ctx, user: discord.User, amount_str: str):
         await db.execute("UPDATE users SET money = ? WHERE user_id = ?", (amt, user.id))
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    await ctx.send(f"✅ Set {user.mention}'s balance to {format_number(amt)}{emoji}.")
+    await ctx.send(f"✅ Set {user.mention}'s wallet to {format_number(amt)}{emoji}.")
 
 @bot.command(name="addbank")
 @owner_only()
@@ -1989,12 +1990,12 @@ async def removebank(ctx, user: discord.User, amount_str: str):
     except:
         return await ctx.send("Invalid amount.")
     cur = await get_user(user.id)
-    new_bank = cur['bank'] - amt
-    if new_bank < 0:
+    if cur['bank'] < amt:
         await update_bank(user.id, -cur['bank'])
         await ctx.send(f"⚠️ {user.mention} only had {format_number(cur['bank'])} in bank. Removed all.")
     else:
         await update_bank(user.id, -amt)
+        emoji = await get_setting(ctx.guild.id, "currency_emoji")
         await ctx.send(f"✅ Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
 
 @bot.command(name="addowner")
