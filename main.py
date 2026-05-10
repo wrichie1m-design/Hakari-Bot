@@ -978,7 +978,6 @@ class MinesView(discord.ui.View):
         self.cashout = discord.ui.Button(label="💰 Cashout", style=discord.ButtonStyle.success, row=4)
         self.cashout.callback = self.cashout_cb
         self.add_item(self.cashout)
-        # Quit button removed
 
     def make_callback(self, pos):
         async def cb(inter):
@@ -1327,11 +1326,14 @@ async def highlow(ctx, amount_str: str, choice: str):
     first = random.choice(values)
     second = random.choice(values)
     if choice.lower() in ["h","higher"] and second > first:
-        await update_money(ctx.author.id, amount*2)
-        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
+        # WIN – pay 1.1x instead of 2x
+        winnings = int(amount * 1.1)
+        await update_money(ctx.author.id, winnings)
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(winnings)}{emoji} (1.1x)!")
     elif choice.lower() in ["l","lower"] and second < first:
-        await update_money(ctx.author.id, amount*2)
-        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(amount*2)}{emoji}!")
+        winnings = int(amount * 1.1)
+        await update_money(ctx.author.id, winnings)
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(winnings)}{emoji} (1.1x)!")
     elif second == first:
         await update_money(ctx.author.id, amount)
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]} (Tie! Money returned).")
