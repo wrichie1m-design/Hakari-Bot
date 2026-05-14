@@ -1,20 +1,3 @@
-Here's the **complete, fully updated script** with every feature you requested:
-
-- **Unlimited money** (stored as TEXT, Python arithmetic – no more 9.2Q cap)
-- **Extended suffixes** up to `vgdc` (10⁶³) and beyond
-- **Gambling cooldown** (3 sec after each game) & bet‑first deduction – no money glitches
-- **Blackjack** shows dealer’s final hand after stand/timeout
-- **Shop & Business** with shortcuts (`.cs`, `.asi`, `.rsi`, `.ms`, `.vs`, `.bfs`, `.cls`, `.gm`, `.bb`, `.biz`, `.ub`, `.cp`, `.db`, `.sb`) and embeds
-- **Leaderboards** fixed (Python arithmetic, embeds)
-- **Relationships** including `.leavefamily`
-- **Owner commands** now accept **@pings or IDs** (`.addowner @user`, `.removeowner 123456`)
-- **Level reward**: every 5 levels (5, 10, 15, …) you get **75,000 coins**
-- All other owner commands (`.addmoney`, `.removemoney`, `.setmoney`, `.addbank`, `.removebank`, `.avt`, `.addaffection`, `.setaffection`, `.rewardlast`, `.protect`, `.unprotect`, `.blacklist`, `.whitelist`, `.economywipe`, `.toggleeconomy`, `.togglerob`, `.togglegambling`, `.setdailyamount`, `.setcurrency`, `.logs`)
-- All gambling games fully implemented (coinflip, slots, blackjack, mines, crash, tower, roulette, highlow, dice, horserace)
-
-Just copy the entire code below and replace your old file – it works directly with your existing database.
-
-```python
 import discord
 from discord.ext import commands, tasks
 import aiosqlite
