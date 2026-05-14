@@ -2025,6 +2025,3 @@ async def on_command_error(ctx, error):
 
 if __name__ == "__main__":
     asyncio.run(bot.start(TOKEN))
-```
-
-This is the complete, final script. Replace your existing bot code with this file and run it – everything will work.
