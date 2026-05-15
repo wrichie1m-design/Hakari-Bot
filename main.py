@@ -891,9 +891,7 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# Mines, Crash, Tower, Roulette, HighLow, Dice, HorseRace (same as before, ensure all present)
-# I'll include them succinctly to keep the script complete.
-
+# Mines
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
         super().__init__(timeout=120)
@@ -978,6 +976,8 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
+# Crash, Tower, Roulette, HighLow, Dice, HorseRace (all present and correct)
+
 @bot.command(name="crash")
 @economy_check()
 @gambling_cooldown_check()
@@ -995,7 +995,6 @@ async def crash(ctx, amount_str: str):
         await ctx.send(f"Crashed at {mult}x! Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# Tower
 class TowerDoorView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=120)
@@ -1095,7 +1094,6 @@ async def tower(ctx, amount_str: str):
     embed.set_footer(text="Each safe door increases your multiplier. Cash out anytime.")
     await ctx.send(embed=embed, view=view)
 
-# Roulette, HighLow, Dice, HorseRace (same as before, ensure present)
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1991,7 +1989,7 @@ async def logs(ctx, limit: int = 10):
     await ctx.send(msg)
 
 # ==================================================
-# EVENTS (level-up 75k reward)
+# EVENTS (level-up ping stays permanently)
 # ==================================================
 @bot.event
 async def on_ready():
@@ -2020,12 +2018,9 @@ async def on_message(message):
             reward = 75000
             await update_money(message.author.id, reward)
             emoji = await get_setting(message.guild.id, "currency_emoji") if message.guild else "💰"
-            level_msg = await message.channel.send(f"Level up! You reached level **{new_lvl}**! Milestone reward: +{format_number(reward)}{emoji}!")
+            await message.channel.send(f"{message.author.mention} leveled up to level **{new_lvl}**! Milestone reward: +{format_number(reward)}{emoji}!")
         else:
-            level_msg = await message.channel.send(f"Level up! You reached level **{new_lvl}**!")
-        await asyncio.sleep(5)
-        try: await level_msg.delete()
-        except: pass
+            await message.channel.send(f"{message.author.mention} leveled up to level **{new_lvl}**!")
     await bot.process_commands(message)
 
 @bot.event
