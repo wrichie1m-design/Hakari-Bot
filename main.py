@@ -43,16 +43,9 @@ def parse_amount(amount_str: str):
         'oc': 1_000_000_000_000_000_000_000_000_000,
         'no': 1_000_000_000_000_000_000_000_000_000_000,
         'dc': 1_000_000_000_000_000_000_000_000_000_000_000,
-        'udc': 10**36,
-        'ddc': 10**39,
-        'tdc': 10**42,
-        'qadc': 10**45,
-        'qidc': 10**48,
-        'sxdc': 10**51,
-        'spdc': 10**54,
-        'ocdc': 10**57,
-        'nodc': 10**60,
-        'vgdc': 10**63,
+        'udc': 10**36, 'ddc': 10**39, 'tdc': 10**42, 'qadc': 10**45,
+        'qidc': 10**48, 'sxdc': 10**51, 'spdc': 10**54, 'ocdc': 10**57,
+        'nodc': 10**60, 'vgdc': 10**63,
     }
     for suffix in sorted(mult, key=len, reverse=True):
         if amount_str.endswith(suffix):
@@ -71,52 +64,30 @@ def parse_amount(amount_str: str):
         raise ValueError("Invalid amount")
 
 def format_number(num: int) -> str:
-    if num >= 10**63:
-        return f"{num/10**63:.1f}vgdc".replace('.0vgdc','vgdc')
-    if num >= 10**60:
-        return f"{num/10**60:.1f}nodc".replace('.0nodc','nodc')
-    if num >= 10**57:
-        return f"{num/10**57:.1f}ocdc".replace('.0ocdc','ocdc')
-    if num >= 10**54:
-        return f"{num/10**54:.1f}spdc".replace('.0spdc','spdc')
-    if num >= 10**51:
-        return f"{num/10**51:.1f}sxdc".replace('.0sxdc','sxdc')
-    if num >= 10**48:
-        return f"{num/10**48:.1f}qidc".replace('.0qidc','qidc')
-    if num >= 10**45:
-        return f"{num/10**45:.1f}qadc".replace('.0qadc','qadc')
-    if num >= 10**42:
-        return f"{num/10**42:.1f}tdc".replace('.0tdc','tdc')
-    if num >= 10**39:
-        return f"{num/10**39:.1f}ddc".replace('.0ddc','ddc')
-    if num >= 10**36:
-        return f"{num/10**36:.1f}udc".replace('.0udc','udc')
-    if num >= 10**33:
-        return f"{num/10**33:.1f}dc".replace('.0dc','dc')
-    if num >= 10**30:
-        return f"{num/10**30:.1f}no".replace('.0no','no')
-    if num >= 10**27:
-        return f"{num/10**27:.1f}oc".replace('.0oc','oc')
-    if num >= 10**24:
-        return f"{num/10**24:.1f}sp".replace('.0sp','sp')
-    if num >= 10**21:
-        return f"{num/10**21:.1f}sx".replace('.0sx','sx')
-    if num >= 10**18:
-        return f"{num/10**18:.1f}Q".replace('.0Q','Q')
-    if num >= 10**15:
-        return f"{num/10**15:.1f}q".replace('.0q','q')
-    if num >= 10**12:
-        return f"{num/10**12:.1f}t".replace('.0t','t')
-    if num >= 10**9:
-        return f"{num/10**9:.1f}b".replace('.0b','b')
-    if num >= 10**6:
-        return f"{num/10**6:.1f}m".replace('.0m','m')
-    if num >= 10**3:
-        return f"{num/10**3:.1f}k".replace('.0k','k')
+    """Format using integer arithmetic – no float overflow."""
+    if num < 1_000:
+        return str(num)
+    tiers = [
+        (10**63, "vgdc"), (10**60, "nodc"), (10**57, "ocdc"),
+        (10**54, "spdc"), (10**51, "sxdc"), (10**48, "qidc"),
+        (10**45, "qadc"), (10**42, "tdc"), (10**39, "ddc"),
+        (10**36, "udc"), (10**33, "dc"), (10**30, "no"),
+        (10**27, "oc"), (10**24, "sp"), (10**21, "sx"),
+        (10**18, "Q"), (10**15, "q"), (10**12, "t"),
+        (10**9, "b"), (10**6, "m"), (10**3, "k"),
+    ]
+    for divisor, suffix in tiers:
+        if num >= divisor:
+            whole = num // divisor
+            remainder = num % divisor
+            decimal = (remainder * 10) // divisor
+            if decimal == 0:
+                return f"{whole}{suffix}"
+            return f"{whole}.{decimal}{suffix}"
     return str(num)
 
 # ==================================================
-# DATABASE SETUP (money/bank stored as TEXT)
+# DATABASE SETUP
 # ==================================================
 async def init_db():
     async with aiosqlite.connect("hakari.db") as db:
@@ -134,7 +105,14 @@ async def init_db():
             daily_messages INTEGER DEFAULT 0,
             shop_name TEXT, shop_items TEXT DEFAULT '{}', shop_open INTEGER DEFAULT 0,
             spouse_id INTEGER, parent_id INTEGER, affection INTEGER DEFAULT 0,
-            gang TEXT, loan_amount TEXT DEFAULT '0', loan_taken_at TIMESTAMP, business_daily TIMESTAMP)''')
+            gang TEXT, loan_amount TEXT DEFAULT '0', loan_taken_at TIMESTAMP,
+            business_daily TIMESTAMP, security_until TIMESTAMP
+        )''')
+        # Add security_until column for existing databases
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN security_until TIMESTAMP")
+        except:
+            pass
         await db.execute('''CREATE TABLE IF NOT EXISTS children (
             parent_id INTEGER, child_id INTEGER, PRIMARY KEY (parent_id, child_id))''')
         await db.execute('''CREATE TABLE IF NOT EXISTS requests (
@@ -273,6 +251,14 @@ async def is_main_owner(uid): row = await db_fetchone("SELECT is_main FROM owner
 async def is_blacklisted(uid): return (await get_user(uid)).get("blacklisted",0)==1
 async def is_protected(uid): return (await get_user(uid)).get("protected",0)==1
 async def is_tax_exempt(uid): return (await get_user(uid)).get("tax_exempt",0)==1
+async def has_security(uid):
+    data = await get_user(uid)
+    until = data.get('security_until')
+    if until:
+        until_dt = datetime.fromisoformat(until)
+        if datetime.now(timezone.utc) < until_dt:
+            return True
+    return False
 
 async def db_fetchone(query, params=()):
     async with aiosqlite.connect("hakari.db") as db:
@@ -393,7 +379,7 @@ class RequestView(discord.ui.View):
         await inter.response.edit_message(content=f"Declined.", view=None); self.completed=True; self.stop()
 
 # ==================================================
-# HELP VIEWS & COMMANDS (6 pages only)
+# HELP VIEWS & COMMANDS
 # ==================================================
 class HelpView(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -439,7 +425,7 @@ class OwnerHelpView(discord.ui.View):
 async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
-        discord.Embed(title="Economy (1/6)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest", inline=False),
+        discord.Embed(title="Economy (1/6)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest\n.security <hours> (1m per hour, max 8h)", inline=False),
         discord.Embed(title="Loans (2/6)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount> (max 50k)\n.repay <all/half/amount>\n.loaninfo", inline=False),
         discord.Embed(title="Gambling (3/6)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines> (1-19)\n.tower <amount>\n.roulette <amount> <red/black/green/number>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>", inline=False),
         discord.Embed(title="Shop & Business (4/6)", color=0x2ecc71).add_field(name="Commands", value=".cs <name> - create shop\n.asi <price> <item> - add item (prices: 1k, 5m, 100sx)\n.rsi <item> - remove item\n.ms - my shop\n.vs @user - visit shop\n.bfs @user <item> - buy\n.cls - toggle shop\n.gm - global market\n.bb <type> - buy business\n.biz - business info\n.ub - upgrade business\n.cp - collect profits\n.db - daily bonus\n.sb - sell business", inline=False),
@@ -452,7 +438,7 @@ async def help_cmd(ctx):
 @owner_only()
 async def owner_commands_cmd(ctx):
     pages = [
-        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]", inline=False),
+        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]\n.sst @user - skip stealing cooldown", inline=False),
         discord.Embed(title="Owner Commands (2/2)", color=0xe74c3c).add_field(name="Protection & Logs", value=".protect @user\n.unprotect @user\n.blacklist @user\n.whitelist @user\n.avt @user\n.addaffection @user <amount>\n.setaffection @user <amount>\n.logs [limit]\n\nOwner Management\n.addowner <@user/ID>\n.removeowner <@user/ID>\n.ownerlist", inline=False)
     ]
     await ctx.send(embed=pages[0], view=OwnerHelpView(ctx, pages))
@@ -472,6 +458,13 @@ async def balance(ctx, user: discord.User = None):
     embed.add_field(name="Total", value=f"{format_number(data['money']+data['bank'])}{emoji}", inline=True)
     if data.get('loan_amount',0)>0:
         embed.add_field(name="Loan", value=f"{format_number(data['loan_amount'])}{emoji}", inline=True)
+    sec = data.get('security_until')
+    if sec:
+        sec_dt = datetime.fromisoformat(sec)
+        if datetime.now(timezone.utc) < sec_dt:
+            remain = sec_dt - datetime.now(timezone.utc)
+            hours = remain.seconds // 3600
+            embed.add_field(name="Security", value=f"Active for {hours}h {remain.seconds%3600//60}m", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name="daily")
@@ -640,6 +633,8 @@ async def rob(ctx, target: discord.User):
         return await ctx.send("Rob disabled.")
     if await is_protected(target.id):
         return await ctx.send(f"{target.mention} is protected.")
+    if await has_security(target.id):
+        return await ctx.send(f"{target.mention} has security active. You cannot rob them.")
     tdata = await get_user(target.id)
     if tdata['money'] < 100:
         return await ctx.send(f"{target.mention} is too poor.")
@@ -674,6 +669,25 @@ async def interest(ctx):
     embed.add_field(name="Your Bank", value=f"{format_number(bank)}", inline=True)
     embed.add_field(name="Daily Interest", value=f"{format_number(daily)}", inline=True)
     await ctx.send(embed=embed)
+
+@bot.command(name="security", aliases=["sec"])
+@economy_check()
+async def security(ctx, hours: int):
+    if hours <= 0 or hours > 8:
+        return await ctx.send("You can rent security for 1 to 8 hours only.")
+    cost = 1_000_000 * hours
+    data = await get_user(ctx.author.id)
+    if data['money'] < cost:
+        return await ctx.send(f"You need {format_number(cost)} coins for {hours} hour(s) of security.")
+    if await has_security(ctx.author.id):
+        return await ctx.send("You already have security active. Wait until it expires to buy again.")
+    await update_money(ctx.author.id, -cost)
+    until = datetime.now(timezone.utc) + timedelta(hours=hours)
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("UPDATE users SET security_until = ? WHERE user_id = ?", (until.isoformat(), ctx.author.id))
+        await db.commit()
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    await ctx.send(f"Security activated for {hours} hour(s) for {format_number(cost)}{emoji}. You are protected from robbery until {until.strftime('%H:%M UTC')}.")
 
 # ==================================================
 # LOAN COMMANDS
@@ -758,7 +772,7 @@ async def loaninfo(ctx):
         await ctx.send(embed=embed)
 
 # ==================================================
-# GAMBLING COMMANDS (all with cooldown, bet-first)
+# GAMBLING COMMANDS
 # ==================================================
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
@@ -786,21 +800,21 @@ async def slots(ctx, amount_str: str):
     amount, err = await get_bet_amount(ctx, amount_str)
     if err: return await ctx.send(err)
     await update_money(ctx.author.id, -amount)
-    emojis = ["Cherry","Lemon","Orange","Watermelon","Star","Diamond"]
+    emojis = ["🍒","🍋","🍊","🍉","⭐","💎"]
     r = [random.choice(emojis) for _ in range(3)]
     mult = 0
-    if r[0]==r[1]==r[2]: mult = 3 if r[0]=="Diamond" else 2
+    if r[0]==r[1]==r[2]: mult = 3 if r[0]=="💎" else 2
     elif r[0]==r[1] or r[1]==r[2] or r[0]==r[2]: mult = 0.5
     winnings = int(amount * mult)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     if mult >= 1:
         await update_money(ctx.author.id, winnings)
-        await ctx.send(f"Slots: {r[0]} {r[1]} {r[2]}\nYou won {format_number(winnings-amount)}{emoji}!")
+        await ctx.send(f"🎰 `{r[0]} {r[1]} {r[2]}`\nYou won {format_number(winnings-amount)}{emoji}!")
     elif mult > 0:
         await update_money(ctx.author.id, winnings)
-        await ctx.send(f"Slots: {r[0]} {r[1]} {r[2]}\nSmall win! Got back {format_number(winnings)}{emoji}.")
+        await ctx.send(f"🎰 `{r[0]} {r[1]} {r[2]}`\nSmall win! Got back {format_number(winnings)}{emoji}.")
     else:
-        await ctx.send(f"Slots: {r[0]} {r[1]} {r[2]}\nLost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🎰 `{r[0]} {r[1]} {r[2]}`\nLost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
 # Blackjack
@@ -891,7 +905,7 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# Mines
+# Mines (original style with bombs and diamonds)
 class MinesView(discord.ui.View):
     def __init__(self, ctx, bet, mines, multiplier, emoji):
         super().__init__(timeout=120)
@@ -899,10 +913,10 @@ class MinesView(discord.ui.View):
         self.revealed=[False]*20; self.mine_pos=set(random.sample(range(20), mines))
         self.safe_reveals=0; self.ended=False; self.start=datetime.now(timezone.utc)
         for i in range(20):
-            btn = discord.ui.Button(label="[]", style=discord.ButtonStyle.secondary, row=i//5, custom_id=f"m{i}")
+            btn = discord.ui.Button(label="⬛", style=discord.ButtonStyle.secondary, row=i//5, custom_id=f"m{i}")
             btn.callback = self.make_callback(i)
             self.add_item(btn)
-        self.cashout = discord.ui.Button(label="Cashout", style=discord.ButtonStyle.success, row=4)
+        self.cashout = discord.ui.Button(label="💰 Cashout", style=discord.ButtonStyle.success, row=4)
         self.cashout.callback = self.cashout_cb
         self.add_item(self.cashout)
     def make_callback(self, pos):
@@ -915,10 +929,10 @@ class MinesView(discord.ui.View):
                 for child in self.children:
                     if isinstance(child, discord.ui.Button) and child.custom_id and child.custom_id.startswith("m"):
                         idx=int(child.custom_id[1:])
-                        if idx in self.mine_pos: child.label="*"; child.style=discord.ButtonStyle.danger
-                        elif self.revealed[idx]: child.label="O"; child.style=discord.ButtonStyle.success
+                        if idx in self.mine_pos: child.label="💣"; child.style=discord.ButtonStyle.danger
+                        elif self.revealed[idx]: child.label="💎"; child.style=discord.ButtonStyle.success
                         child.disabled=True
-                await inter.response.edit_message(content=f"BOOM! Lost {format_number(self.bet)}{self.emoji}.", view=self)
+                await inter.response.edit_message(content=f"💥 BOOM! You lost {format_number(self.bet)}{self.emoji}.", view=self)
                 self.stop(); await set_gambling_cooldown(self.ctx.author.id)
             else:
                 self.safe_reveals+=1
@@ -926,14 +940,14 @@ class MinesView(discord.ui.View):
                 self.mult = min(self.mult,100)
                 for child in self.children:
                     if isinstance(child, discord.ui.Button) and child.custom_id == f"m{pos}":
-                        child.label="O"; child.style=discord.ButtonStyle.success; child.disabled=True; break
+                        child.label="💎"; child.style=discord.ButtonStyle.success; child.disabled=True; break
                 remain = 120 - (datetime.now(timezone.utc)-self.start).total_seconds()
                 mins, secs = divmod(max(0,int(remain)),60)
                 board = ""
                 for i in range(20):
-                    board += "O " if self.revealed[i] else "[] "
+                    board += "💎 " if self.revealed[i] else "⬛ "
                     if (i+1)%5==0: board+="\n"
-                embed = discord.Embed(title="Minesweeper", color=0xf1c40f)
+                embed = discord.Embed(title="💣 Minesweeper", color=0xf1c40f)
                 embed.add_field(name="Board", value=board, inline=False)
                 embed.add_field(name="Mines", value=f"{self.mines} bombs", inline=True)
                 embed.add_field(name="Multiplier", value=f"{self.mult}x", inline=True)
@@ -943,22 +957,22 @@ class MinesView(discord.ui.View):
         return cb
     async def cashout_cb(self, inter):
         if inter.user != self.ctx.author or self.ended: return
-        if self.safe_reveals==0: return await inter.response.send_message("Reveal at least one tile!", ephemeral=True)
+        if self.safe_reveals==0: return await inter.response.send_message("❌ Reveal at least one tile before cashing out!", ephemeral=True)
         win = int(self.bet*self.mult)
         await update_money(self.ctx.author.id, win)
-        await inter.response.edit_message(content=f"Cashed out! Won {format_number(win-self.bet)}{self.emoji}!", view=None)
+        await inter.response.edit_message(content=f"💰 Cashed out! Won {format_number(win-self.bet)}{self.emoji}!", view=None)
         self.ended=True; self.stop()
         await set_gambling_cooldown(self.ctx.author.id)
     async def on_timeout(self):
         if not self.ended:
-            await self.ctx.send(f"Timeout! Lost {format_number(self.bet)}{self.emoji}.")
+            await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
             await set_gambling_cooldown(self.ctx.author.id)
 
 @bot.command(name="mines")
 @economy_check()
 @gambling_cooldown_check()
 async def mines_cmd(ctx, amount_str: str, mines: int = 5):
-    if mines<1 or mines>19: return await ctx.send("Mines must be 1-19.")
+    if mines<1 or mines>19: return await ctx.send("❌ Mines must be 1-19.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err: return await ctx.send(err)
     await update_money(ctx.author.id, -amount)
@@ -966,8 +980,8 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     mult = min(mult,100)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     view = MinesView(ctx, amount, mines, mult, emoji)
-    board = "[] [] [] [] []\n[] [] [] [] []\n[] [] [] [] []\n[] [] [] [] []"
-    embed = discord.Embed(title="Minesweeper", color=0xf1c40f)
+    board = "⬛ ⬛ ⬛ ⬛ ⬛\n⬛ ⬛ ⬛ ⬛ ⬛\n⬛ ⬛ ⬛ ⬛ ⬛\n⬛ ⬛ ⬛ ⬛ ⬛"
+    embed = discord.Embed(title="💣 Minesweeper", color=0xf1c40f)
     embed.add_field(name="Board", value=board, inline=False)
     embed.add_field(name="Mines", value=f"{mines} bombs", inline=True)
     embed.add_field(name="Multiplier", value=f"{mult}x", inline=True)
@@ -976,8 +990,7 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
-# Crash, Tower, Roulette, HighLow, Dice, HorseRace (all present and correct)
-
+# Crash
 @bot.command(name="crash")
 @economy_check()
 @gambling_cooldown_check()
@@ -990,11 +1003,12 @@ async def crash(ctx, amount_str: str):
     if random.random()<0.5:
         win = int(amount*mult)
         await update_money(ctx.author.id, win)
-        await ctx.send(f"Crash at {mult}x! Won {format_number(win-amount)}{emoji}!")
+        await ctx.send(f"📈 Crash at {mult}x! Won {format_number(win-amount)}{emoji}!")
     else:
-        await ctx.send(f"Crashed at {mult}x! Lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"💥 Crashed at {mult}x! Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
+# Tower
 class TowerDoorView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=120)
@@ -1009,11 +1023,11 @@ class TowerDoorView(discord.ui.View):
                 self.remove_item(child)
         self.mine_position=random.randint(1,3)
         for i in range(1,4):
-            btn = discord.ui.Button(label=f"Door {i}", style=discord.ButtonStyle.secondary, custom_id=f"door_{i}")
+            btn = discord.ui.Button(label=f"🚪 Door {i}", style=discord.ButtonStyle.secondary, custom_id=f"door_{i}")
             btn.callback=self.make_door_callback(i)
             self.add_item(btn)
-        if not any(isinstance(c, discord.ui.Button) and c.label=="Cash Out" for c in self.children):
-            self.cashout_btn = discord.ui.Button(label="Cash Out", style=discord.ButtonStyle.success)
+        if not any(isinstance(c, discord.ui.Button) and c.label=="💰 Cash Out" for c in self.children):
+            self.cashout_btn = discord.ui.Button(label="💰 Cash Out", style=discord.ButtonStyle.success)
             self.cashout_btn.callback = self.cashout_callback
             self.add_item(self.cashout_btn)
     def get_multiplier(self, floor): return round(1.5**floor,2)
@@ -1022,14 +1036,15 @@ class TowerDoorView(discord.ui.View):
         return int(self.bet * self.get_multiplier(self.current_floor))
     async def update_embed(self, interaction, crashed=False):
         cashout = self.get_cashout_value()
-        embed = discord.Embed(title=f"{self.ctx.author.display_name}'s Tower", color=0x2ecc71 if not crashed else 0xe74c3c)
+        embed = discord.Embed(title=f"{self.ctx.author.display_name}'s Tower – Door Pick",
+                              color=0x2ecc71 if not crashed else 0xe74c3c)
         embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
         embed.add_field(name="Floor", value=f"{self.current_floor}/{self.max_floor}", inline=True)
-        embed.add_field(name="Cashout Value", value=f"{format_number(cashout)} {self.emoji}", inline=True)
+        embed.add_field(name="💰 Cashout Value", value=f"{format_number(cashout)} {self.emoji}", inline=True)
         if not crashed:
-            embed.add_field(name="Pick a Door", value="One door hides a mine. The other two are safe.", inline=False)
+            embed.add_field(name="Pick a Door", value="One door hides a 💣 mine. The other two are safe.", inline=False)
         else:
-            embed.add_field(name="BOOM!", value=f"You hit the mine at floor {self.current_floor+1}! Lost {format_number(self.bet)}{self.emoji}.", inline=False)
+            embed.add_field(name="💥 BOOM!", value=f"You hit the mine at floor {self.current_floor+1}! Lost {format_number(self.bet)}{self.emoji}.", inline=False)
         embed.set_footer(text=f"Floors: {self.max_floor} | Multiplier: {self.get_multiplier(self.current_floor)}x")
         await interaction.response.edit_message(embed=embed, view=self if not crashed else None)
     def make_door_callback(self, door_number):
@@ -1050,7 +1065,7 @@ class TowerDoorView(discord.ui.View):
                 embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
                 embed.add_field(name="Floors Cleared", value=f"{self.current_floor}/{self.max_floor}", inline=True)
                 embed.add_field(name="Winnings", value=f"{format_number(winnings)} {self.emoji}", inline=True)
-                embed.add_field(name="CONGRATULATIONS!", value="You reached the top!", inline=False)
+                embed.add_field(name="🎉 CONGRATULATIONS!", value="You reached the top!", inline=False)
                 await interaction.response.edit_message(embed=embed, view=None)
                 self.game_over=True; self.stop()
                 await set_gambling_cooldown(self.ctx.author.id)
@@ -1061,20 +1076,20 @@ class TowerDoorView(discord.ui.View):
     async def cashout_callback(self, interaction: discord.Interaction):
         if interaction.user != self.ctx.author: return await interaction.response.send_message("Not your game!", ephemeral=True)
         if self.game_over: return
-        if self.current_floor==0: return await interaction.response.send_message("Clear at least one floor before cashing out!", ephemeral=True)
+        if self.current_floor==0: return await interaction.response.send_message("❌ Clear at least one floor before cashing out!", ephemeral=True)
         winnings = self.get_cashout_value()
         await update_money(self.ctx.author.id, winnings)
         embed = discord.Embed(title=f"{self.ctx.author.display_name}'s Tower", color=0x2ecc71)
         embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
         embed.add_field(name="Floors Cleared", value=f"{self.current_floor}/{self.max_floor}", inline=True)
         embed.add_field(name="Cashed Out", value=f"{format_number(winnings)} {self.emoji}", inline=True)
-        embed.add_field(name="You cashed out!", value="Smart choice!", inline=False)
+        embed.add_field(name="✅ You cashed out!", value="Smart choice!", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.game_over=True; self.stop()
         await set_gambling_cooldown(self.ctx.author.id)
     async def on_timeout(self):
         if not self.game_over:
-            await self.ctx.send(f"Timeout! Lost {format_number(self.bet)}{self.emoji}.")
+            await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
             await set_gambling_cooldown(self.ctx.author.id)
 
 @bot.command(name="tower")
@@ -1086,14 +1101,15 @@ async def tower(ctx, amount_str: str):
     await update_money(ctx.author.id, -amount)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     view = TowerDoorView(ctx, amount, emoji)
-    embed = discord.Embed(title=f"{ctx.author.display_name}'s Tower", color=0x2ecc71)
+    embed = discord.Embed(title=f"{ctx.author.display_name}'s Tower – Door Pick", color=0x2ecc71)
     embed.add_field(name="Bet", value=f"{format_number(amount)} {emoji}", inline=True)
     embed.add_field(name="Floor", value="0/???", inline=True)
-    embed.add_field(name="Cashout Value", value=f"{format_number(amount)} {emoji}", inline=True)
-    embed.add_field(name="Pick a Door", value="One door hides a mine. The other two are safe.", inline=False)
+    embed.add_field(name="💰 Cashout Value", value=f"{format_number(amount)} {emoji}", inline=True)
+    embed.add_field(name="Pick a Door", value="One door hides a 💣 mine. The other two are safe.", inline=False)
     embed.set_footer(text="Each safe door increases your multiplier. Cash out anytime.")
     await ctx.send(embed=embed, view=view)
 
+# Roulette, HighLow, Dice, HorseRace
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1118,12 +1134,12 @@ async def roulette(ctx, amount_str: str, *, bet: str):
         if number==0: win,payout = True, amount*14
     else:
         await update_money(ctx.author.id, amount)  # refund
-        return await ctx.send("Invalid bet! Choose: red, black, green, or a number 0-36")
+        return await ctx.send("❌ Invalid bet! Choose: red, black, green, or a number 0-36")
     if win:
         await update_money(ctx.author.id, payout)
-        await ctx.send(f"The ball landed on **{number}** ({color})! You won {format_number(payout-amount)}{emoji}!")
+        await ctx.send(f"🎯 The ball landed on **{number}** ({color})! You won {format_number(payout-amount)}{emoji}!")
     else:
-        await ctx.send(f"The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
 @bot.command(name="highlow", aliases=["hl"])
@@ -1133,7 +1149,7 @@ async def highlow(ctx, amount_str: str, choice: str):
     amount, err = await get_bet_amount(ctx, amount_str)
     if err: return await ctx.send(err)
     if choice.lower() not in ["h","higher","l","lower"]:
-        return await ctx.send("Choose: h (higher) or l (lower)")
+        return await ctx.send("❌ Choose: h (higher) or l (lower)")
     await update_money(ctx.author.id, -amount)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     cards = {2:"2",3:"3",4:"4",5:"5",6:"6",7:"7",8:"8",9:"9",10:"10",11:"J",12:"Q",13:"K",14:"A"}
@@ -1142,23 +1158,23 @@ async def highlow(ctx, amount_str: str, choice: str):
     if choice.lower() in ["h","higher"] and second>first:
         winnings = int(amount*1.1)
         await update_money(ctx.author.id, winnings)
-        await ctx.send(f"First: {cards[first]}, Second: {cards[second]}\nYou won {format_number(winnings-amount)}{emoji} (1.1x)!")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(winnings-amount)}{emoji} (1.1x)!")
     elif choice.lower() in ["l","lower"] and second<first:
         winnings = int(amount*1.1)
         await update_money(ctx.author.id, winnings)
-        await ctx.send(f"First: {cards[first]}, Second: {cards[second]}\nYou won {format_number(winnings-amount)}{emoji} (1.1x)!")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n✅ You won {format_number(winnings-amount)}{emoji} (1.1x)!")
     elif second==first:
         await update_money(ctx.author.id, amount)
-        await ctx.send(f"First: {cards[first]}, Second: {cards[second]} (Tie! Money returned).")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]} (Tie! Money returned).")
     else:
-        await ctx.send(f"First: {cards[first]}, Second: {cards[second]}\nYou lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n❌ You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
 @gambling_cooldown_check()
 async def dice(ctx, amount_str: str, guess: int):
-    if guess<1 or guess>6: return await ctx.send("Guess must be between 1 and 6.")
+    if guess<1 or guess>6: return await ctx.send("❌ Guess must be between 1 and 6.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err: return await ctx.send(err)
     await update_money(ctx.author.id, -amount)
@@ -1167,9 +1183,9 @@ async def dice(ctx, amount_str: str, guess: int):
     if roll==guess:
         payout = amount*5
         await update_money(ctx.author.id, payout)
-        await ctx.send(f"You rolled a **{roll}**! You guessed correctly! Won {format_number(payout-amount)}{emoji}!")
+        await ctx.send(f"🎲 You rolled a **{roll}**! You guessed correctly! Won {format_number(payout-amount)}{emoji}!")
     else:
-        await ctx.send(f"You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🎲 You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
 @bot.command(name="horserace", aliases=["hrace"])
@@ -1177,7 +1193,7 @@ async def dice(ctx, amount_str: str, guess: int):
 @gambling_cooldown_check()
 async def horserace(ctx, amount_str: str, horse: str):
     horse = horse.upper()
-    if horse not in ["A","B","C","D"]: return await ctx.send("Choose horse A, B, C, or D.")
+    if horse not in ["A","B","C","D"]: return await ctx.send("❌ Choose horse A, B, C, or D.")
     amount, err = await get_bet_amount(ctx, amount_str)
     if err: return await ctx.send(err)
     await update_money(ctx.author.id, -amount)
@@ -1188,12 +1204,12 @@ async def horserace(ctx, amount_str: str, horse: str):
     elif rand<0.70: winner="B"
     elif rand<0.90: winner="C"
     else: winner="D"
-    msg = await ctx.send("THE RACE IS STARTING!\nA: Horse   B: Horse   C: Horse   D: Horse")
+    msg = await ctx.send("🏁 **THE RACE IS STARTING!** 🏁\n🏁 A: 🐎     B: 🐎     C: 🐎     D: 🐎")
     frames = [
-        "A: ->   B:      C:      D:",
-        "A: -->  B: ->   C:      D:",
-        "A: ---> B: -->  C: ->   D:",
-        "A: ---->B: ---> C: -->  D: ->",
+        "🏁 A: 🐎→   B: 🐎     C: 🐎     D: 🐎",
+        "🏁 A: 🐎→→  B: 🐎→    C: 🐎     D: 🐎",
+        "🏁 A: 🐎→→→ B: 🐎→→   C: 🐎→    D: 🐎",
+        "🏁 A: 🐎→→→→B: 🐎→→→  C: 🐎→→   D: 🐎→",
     ]
     for f in frames:
         await asyncio.sleep(1)
@@ -1201,9 +1217,9 @@ async def horserace(ctx, amount_str: str, horse: str):
     if horse==winner:
         payout = int(amount*horses[winner])
         await update_money(ctx.author.id, payout)
-        await ctx.send(f"Horse {winner} WINS! Your horse {horse} won! You won {format_number(payout-amount)}{emoji}!")
+        await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} won! You won {format_number(payout-amount)}{emoji}!")
     else:
-        await ctx.send(f"Horse {winner} WINS! Your horse {horse} lost. You lost {format_number(amount)}{emoji}.")
+        await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} lost. You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
 # ==================================================
@@ -1495,7 +1511,7 @@ async def affection(ctx, user: discord.User = None):
     elif aff>=1000: level = "Close Friends"
     elif aff>=500: level = "Friends"
     else: level = "Strangers"
-    bar = "X"*min(20, aff//250) + "-"*(20-min(20, aff//250))
+    bar = "█"*min(20, aff//250) + "░"*(20-min(20, aff//250))
     embed = discord.Embed(title=f"{target.display_name}'s Affection", color=0xe91e63)
     embed.add_field(name="Level", value=level, inline=False)
     embed.add_field(name="Points", value=format_number(aff), inline=False)
@@ -1603,7 +1619,7 @@ async def pending(ctx):
     await ctx.send(msg)
 
 # ==================================================
-# FIXED LEADERBOARDS (Python arithmetic, embeds, no truncation)
+# LEADERBOARDS (integer arithmetic, no float overflow)
 # ==================================================
 @bot.command(name="globalleaderboard", aliases=["glb"])
 @economy_check()
@@ -1710,7 +1726,7 @@ async def level(ctx):
     next_xp = ((lvl+1)**2)*100; needed = next_xp - xp
     if lvl==0: bar_len = min(20, int(xp/100*20))
     else: bar_len = min(20, int((xp - (lvl**2)*100)/(next_xp - (lvl**2)*100)*20))
-    bar = "X"*bar_len + "-"*(20-bar_len)
+    bar = "█"*bar_len + "░"*(20-bar_len)
     embed = discord.Embed(title=f"{ctx.author.display_name}", color=0x9b59b6)
     embed.add_field(name="Level", value=lvl, inline=True)
     embed.add_field(name="XP", value=f"{format_number(xp)} / {format_number(next_xp)}", inline=True)
@@ -1719,7 +1735,7 @@ async def level(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# OWNER COMMANDS (pings or IDs for owner management)
+# OWNER COMMANDS
 # ==================================================
 @bot.command(name="addmoney")
 @owner_only()
@@ -1975,6 +1991,15 @@ async def setcurrency(ctx, emoji: str):
         await db.commit()
     await ctx.send(f"Currency emoji set to {emoji}.")
 
+@bot.command(name="skipstealingtime", aliases=["sst"])
+@owner_only()
+async def skip_stealing_time(ctx, user: discord.User):
+    """Reset the robbery cooldown for the specified user."""
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("UPDATE users SET last_rob = NULL WHERE user_id = ?", (user.id,))
+        await db.commit()
+    await ctx.send(f"Reset robbery cooldown for {user.mention}. They can steal again immediately.")
+
 @bot.command(name="logs")
 @owner_only()
 async def logs(ctx, limit: int = 10):
@@ -1989,7 +2014,7 @@ async def logs(ctx, limit: int = 10):
     await ctx.send(msg)
 
 # ==================================================
-# EVENTS (level-up ping stays permanently)
+# EVENTS (level-up with doubling rewards)
 # ==================================================
 @bot.event
 async def on_ready():
@@ -2015,10 +2040,15 @@ async def on_message(message):
     new_lvl = await add_xp(message.author.id, random.randint(10,20))
     if new_lvl:
         if new_lvl % 5 == 0:
-            reward = 75000
+            # Doubling reward every 5 levels: 75k at lv5, 150k at lv10, 300k at lv15, etc.
+            multiplier = new_lvl // 5 - 1  # lv5 => 0, lv10 => 1, lv15 => 2
+            reward = 75000 * (2 ** multiplier)
             await update_money(message.author.id, reward)
             emoji = await get_setting(message.guild.id, "currency_emoji") if message.guild else "💰"
-            await message.channel.send(f"{message.author.mention} leveled up to level **{new_lvl}**! Milestone reward: +{format_number(reward)}{emoji}!")
+            await message.channel.send(
+                f"{message.author.mention} leveled up to level **{new_lvl}**! "
+                f"Milestone reward: +{format_number(reward)}{emoji}!"
+            )
         else:
             await message.channel.send(f"{message.author.mention} leveled up to level **{new_lvl}**!")
     await bot.process_commands(message)
