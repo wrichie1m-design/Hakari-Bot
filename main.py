@@ -23,7 +23,7 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=
 
 gambling_cooldowns = {}
 recent_message_authors = {}  # guild_id -> deque(user_ids)
-invite_cache = {}  # guild_id -> list of Invite objects
+invite_tracker = {}  # guild_id -> dict{code: (uses, inviter_id)}
 
 # ==================================================
 # NUMBER FORMATTING (unlimited, extended suffixes)
@@ -438,12 +438,13 @@ class OwnerHelpView(discord.ui.View):
 async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
-        discord.Embed(title="Economy (1/6)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest\n.security <hours> (1h=10M, 2h=20M, 3h=40M...)", inline=False),
-        discord.Embed(title="Loans (2/6)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount> (max 50k)\n.repay <all/half/amount>\n.loaninfo", inline=False),
-        discord.Embed(title="Gambling (3/6)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines> (1-19)\n.tower <amount>\n.roulette <amount> <red/black/green/number>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>", inline=False),
-        discord.Embed(title="Shop & Business (4/6)", color=0x2ecc71).add_field(name="Commands", value=".cs <name> - create shop\n.asi <price> <item> - add item (prices: 1k, 5m, 100sx)\n.rsi <item> - remove item\n.ms - my shop\n.vs @user - visit shop\n.bfs @user <item> - buy\n.cls - toggle shop\n.gm - global market\n.bb <type> - buy business\n.biz - business info\n.ub - upgrade business\n.cp - collect profits\n.db - daily bonus\n.sb - sell business", inline=False),
-        discord.Embed(title="Relationships (5/6)", color=0xe91e63).add_field(name="Commands", value=".date @user\n.marry @user\n.divorce\n.affection\n.gift @user <amount>\n.adopt @user\n.children\n.family\n.leavefamily (if child)\n.pending", inline=False),
-        discord.Embed(title="Leaderboards & Invites (6/6)", color=0x9b59b6).add_field(name="Commands", value=".glb money / .glb xp\n.slb money / .slb xp\n.topcouples\n.level\n.invites - your invite count\n.invlb - invite leaderboard\n.claim - claim invite reward\n.setinvitereward <invites> <amount> (owner)", inline=False)
+        discord.Embed(title="Economy (1/7)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest", inline=False),
+        discord.Embed(title="Loans (2/7)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount> (max 50k)\n.repay <all/half/amount>\n.loaninfo", inline=False),
+        discord.Embed(title="Gambling (3/7)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines> (1-19)\n.tower <amount>\n.roulette <amount> <red/black/green/number>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>", inline=False),
+        discord.Embed(title="Shop & Business (4/7)", color=0x2ecc71).add_field(name="Commands", value=".cs <name> - create shop\n.asi <price> <item> - add item (prices: 1k, 5m, 100sx)\n.rsi <item> - remove item\n.ms - my shop\n.vs @user - visit shop\n.bfs @user <item> - buy\n.cls - toggle shop\n.gm - global market\n.bb <type> - buy business\n.biz - business info\n.ub - upgrade business\n.cp - collect profits\n.db - daily bonus\n.sb - sell business", inline=False),
+        discord.Embed(title="Relationships (5/7)", color=0xe91e63).add_field(name="Commands", value=".date @user\n.marry @user\n.divorce\n.affection\n.gift @user <amount>\n.adopt @user\n.children\n.family\n.leavefamily (if child)\n.pending", inline=False),
+        discord.Embed(title="Leaderboards (6/7)", color=0x9b59b6).add_field(name="Commands", value=".glb money / .glb xp\n.slb money / .slb xp\n.topcouples\n.level", inline=False),
+        discord.Embed(title="Invites & Special (7/7)", color=0xe74c3c).add_field(name="Commands", value=".invites - your invite count\n.invlb - invite leaderboard\n.claim - claim invite reward\n.security <hours> - protect wallet (1h=10M, 2h=20M...)\nOwner: .sir <invites> <amount>", inline=False)
     ]
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
 
@@ -451,7 +452,7 @@ async def help_cmd(ctx):
 @owner_only()
 async def owner_commands_cmd(ctx):
     pages = [
-        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]\n.sst @user - skip stealing cooldown\n.setinvitereward <invites> <amount>", inline=False),
+        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]\n.sst @user - skip stealing cooldown\n.sir <invites> <amount> - set invite reward", inline=False),
         discord.Embed(title="Owner Commands (2/2)", color=0xe74c3c).add_field(name="Protection & Logs", value=".protect @user\n.unprotect @user\n.blacklist @user\n.whitelist @user\n.avt @user\n.addaffection @user <amount>\n.setaffection @user <amount>\n.logs [limit]\n\nOwner Management\n.addowner <@user/ID>\n.removeowner <@user/ID>\n.ownerlist", inline=False)
     ]
     await ctx.send(embed=pages[0], view=OwnerHelpView(ctx, pages))
@@ -1193,7 +1194,7 @@ async def tower(ctx, amount_str: str):
     embed.set_footer(text="Each safe door increases your multiplier. Cash out anytime.")
     await ctx.send(embed=embed, view=view)
 
-# Roulette, HighLow, Dice, HorseRace
+# Roulette
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1226,6 +1227,7 @@ async def roulette(ctx, amount_str: str, *, bet: str):
         await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
+# HighLow
 @bot.command(name="highlow", aliases=["hl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1254,6 +1256,7 @@ async def highlow(ctx, amount_str: str, choice: str):
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n❌ You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
+# Dice
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1272,6 +1275,7 @@ async def dice(ctx, amount_str: str, guess: int):
         await ctx.send(f"🎲 You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
+# HorseRace
 @bot.command(name="horserace", aliases=["hrace"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1819,41 +1823,64 @@ async def level(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# INVITE SYSTEM
+# INVITE SYSTEM (FIXED)
 # ==================================================
+async def update_invite_cache(guild):
+    """Fetch all invites for a guild and update invite_tracker with {code: (uses, inviter_id)}."""
+    try:
+        invites = await guild.invites()
+        invite_tracker[guild.id] = {}
+        for inv in invites:
+            invite_tracker[guild.id][inv.code] = (inv.uses, inv.inviter.id if inv.inviter else None)
+    except (discord.Forbidden, discord.HTTPException):
+        invite_tracker[guild.id] = {}
+
 @bot.event
-async def on_invite_create(invite):
-    guild_id = invite.guild.id
-    if guild_id not in invite_cache:
-        invite_cache[guild_id] = []
-    invite_cache[guild_id].append(invite)
+async def on_ready():
+    await init_db()
+    loan_interest.start()
+    bank_interest.start()
+    # Initial invite cache for all guilds
+    for guild in bot.guilds:
+        await update_invite_cache(guild)
+    print(f"{bot.user} ready (unlimited money).")
 
 @bot.event
 async def on_member_join(member):
-    guild_id = member.guild.id
-    if guild_id in invite_cache:
-        invites = invite_cache[guild_id]
-        new_invites = []
-        inviter_id = None
-        for inv in invites:
-            try:
-                fresh_inv = await member.guild.fetch_invite(inv.code)
-                if fresh_inv.uses > inv.uses:
-                    inviter_id = fresh_inv.inviter.id
-                    new_invites.append(fresh_inv)
-                else:
-                    new_invites.append(inv)
-            except:
-                pass
-        invite_cache[guild_id] = new_invites
-        if inviter_id:
-            async with aiosqlite.connect("hakari.db") as db:
-                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (member.id,))
-                await db.execute("UPDATE users SET inviter_id = ? WHERE user_id = ?", (inviter_id, member.id))
-                await db.execute("UPDATE users SET invite_count = invite_count + 1 WHERE user_id = ?", (inviter_id,))
-                await db.execute("INSERT OR IGNORE INTO invited_users (inviter_id, user_id, joined_at) VALUES (?, ?, ?)",
-                                 (inviter_id, member.id, datetime.now(timezone.utc).isoformat()))
-                await db.commit()
+    guild = member.guild
+    await asyncio.sleep(1)  # Small delay to ensure invite uses update
+    # Fetch current invites
+    try:
+        current_invites = await guild.invites()
+    except:
+        return
+    previous = invite_tracker.get(guild.id, {})
+    inviter_id = None
+    for inv in current_invites:
+        prev_data = previous.get(inv.code)
+        if prev_data:
+            prev_uses, prev_inviter = prev_data
+            if inv.uses > prev_uses and inv.inviter:
+                inviter_id = inv.inviter.id
+                # Update tracker
+                invite_tracker[guild.id][inv.code] = (inv.uses, inviter_id)
+                break
+    # If not found through invite comparison, try to use any invite where uses increased
+    if inviter_id is None:
+        for inv in current_invites:
+            if inv.code not in previous and inv.inviter and inv.uses > 0:
+                inviter_id = inv.inviter.id
+                break
+    if inviter_id:
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (member.id,))
+            await db.execute("UPDATE users SET inviter_id = ? WHERE user_id = ?", (inviter_id, member.id))
+            await db.execute("UPDATE users SET invite_count = invite_count + 1 WHERE user_id = ?", (inviter_id,))
+            await db.execute("INSERT OR IGNORE INTO invited_users (inviter_id, user_id, joined_at) VALUES (?, ?, ?)",
+                             (inviter_id, member.id, datetime.now(timezone.utc).isoformat()))
+            await db.commit()
+    # Update cache with all current invites
+    await update_invite_cache(guild)
 
 @bot.event
 async def on_member_remove(member):
@@ -1920,7 +1947,7 @@ async def invite_leaderboard(ctx):
     embed.description = desc
     await ctx.send(embed=embed)
 
-@bot.command(name="setinvitereward")
+@bot.command(name="setinvitereward", aliases=["sir"])
 @owner_only()
 async def set_invite_reward(ctx, invites: int, amount_str: str):
     try:
@@ -2216,20 +2243,6 @@ async def logs(ctx, limit: int = 10):
 # ==================================================
 # EVENTS (level-up with doubling rewards)
 # ==================================================
-@bot.event
-async def on_ready():
-    await init_db()
-    loan_interest.start()
-    bank_interest.start()
-    # Cache existing invites for tracking
-    for guild in bot.guilds:
-        try:
-            invites = await guild.invites()
-            invite_cache[guild.id] = list(invites)
-        except:
-            pass
-    print(f"{bot.user} ready (unlimited money).")
-
 @bot.event
 async def on_message(message):
     if message.author.bot: return
