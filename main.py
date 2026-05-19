@@ -22,8 +22,8 @@ intents.members = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=None)
 
 gambling_cooldowns = {}
-recent_message_authors = {}  # guild_id -> deque(user_ids)
-invite_tracker = {}  # guild_id -> dict{code: (uses, inviter_id)}
+recent_message_authors = {}          # guild_id -> deque(user_ids)
+invite_tracker = {}                  # guild_id -> dict{code: (uses, inviter_id)}
 
 # ==================================================
 # NUMBER FORMATTING (unlimited, extended suffixes)
@@ -438,13 +438,13 @@ class OwnerHelpView(discord.ui.View):
 async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
-        discord.Embed(title="Economy (1/7)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest", inline=False),
+        discord.Embed(title="Economy (1/7)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest\n.security <hours> – protect wallet (1h=10M, 2h=20M...)", inline=False),
         discord.Embed(title="Loans (2/7)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount> (max 50k)\n.repay <all/half/amount>\n.loaninfo", inline=False),
         discord.Embed(title="Gambling (3/7)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines> (1-19)\n.tower <amount>\n.roulette <amount> <red/black/green/number>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>", inline=False),
         discord.Embed(title="Shop & Business (4/7)", color=0x2ecc71).add_field(name="Commands", value=".cs <name> - create shop\n.asi <price> <item> - add item (prices: 1k, 5m, 100sx)\n.rsi <item> - remove item\n.ms - my shop\n.vs @user - visit shop\n.bfs @user <item> - buy\n.cls - toggle shop\n.gm - global market\n.bb <type> - buy business\n.biz - business info\n.ub - upgrade business\n.cp - collect profits\n.db - daily bonus\n.sb - sell business", inline=False),
         discord.Embed(title="Relationships (5/7)", color=0xe91e63).add_field(name="Commands", value=".date @user\n.marry @user\n.divorce\n.affection\n.gift @user <amount>\n.adopt @user\n.children\n.family\n.leavefamily (if child)\n.pending", inline=False),
         discord.Embed(title="Leaderboards (6/7)", color=0x9b59b6).add_field(name="Commands", value=".glb money / .glb xp\n.slb money / .slb xp\n.topcouples\n.level", inline=False),
-        discord.Embed(title="Invites & Special (7/7)", color=0xe74c3c).add_field(name="Commands", value=".invites - your invite count\n.invlb - invite leaderboard\n.claim - claim invite reward\n.security <hours> - protect wallet (1h=10M, 2h=20M...)\nOwner: .sir <invites> <amount>", inline=False)
+        discord.Embed(title="Invites (7/7)", color=0x9b59b6).add_field(name="Commands", value=".invites - your invite count\n.invlb - invite leaderboard\n.claim - claim invite reward", inline=False)
     ]
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
 
@@ -1005,7 +1005,7 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
-# Interactive Crash game
+# Interactive Crash game (fixed with live updates)
 class CrashView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=30)
@@ -1034,7 +1034,7 @@ class CrashView(discord.ui.View):
                 embed.add_field(name="Potential Win", value=f"{format_number(int(self.bet * self.multiplier))} {self.emoji}", inline=True)
                 embed.set_footer(text="Click 'Cash Out' to secure your winnings!")
                 await self.message.edit(embed=embed, view=self)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)   # update every 0.5 seconds
         except (discord.NotFound, asyncio.CancelledError):
             pass
 
@@ -2260,7 +2260,7 @@ async def on_message(message):
     new_lvl = await add_xp(message.author.id, random.randint(10,20))
     if new_lvl:
         if new_lvl % 5 == 0:
-            multiplier = new_lvl // 5 - 1  # lv5 => 0, lv10 => 1, ...
+            multiplier = new_lvl // 5 - 1
             reward = 75000 * (2 ** multiplier)
             await update_money(message.author.id, reward)
             emoji = await get_setting(message.guild.id, "currency_emoji") if message.guild else "💰"
