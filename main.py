@@ -1021,7 +1021,9 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
-# Interactive Crash game (FIXED with lock for reliable cash out)
+# ==================================================
+# INTERACTIVE CRASH GAME (WEIGHTED CRASH POINTS – can crash at 1.01x)
+# ==================================================
 class CrashView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=30)
@@ -1031,7 +1033,20 @@ class CrashView(discord.ui.View):
         self.crashed = False
         self.cashed_out = False
         self.multiplier = 1.0
-        self.crash_point = round(random.uniform(1.20, 50.0), 2)
+        # WEIGHTED crash point: sometimes very low, sometimes high
+        roll = random.random()
+        if roll < 0.25:          # 25% chance to crash between 1.01 - 1.50
+            self.crash_point = round(random.uniform(1.01, 1.50), 2)
+        elif roll < 0.50:        # 25% chance to crash between 1.50 - 3.00
+            self.crash_point = round(random.uniform(1.50, 3.00), 2)
+        elif roll < 0.70:        # 20% chance to crash between 3.00 - 10.00
+            self.crash_point = round(random.uniform(3.00, 10.00), 2)
+        elif roll < 0.85:        # 15% chance to crash between 10.00 - 25.00
+            self.crash_point = round(random.uniform(10.00, 25.00), 2)
+        elif roll < 0.95:        # 10% chance to crash between 25.00 - 50.00
+            self.crash_point = round(random.uniform(25.00, 50.00), 2)
+        else:                     # 5% chance to crash between 50.00 - 100.00
+            self.crash_point = round(random.uniform(50.00, 100.00), 2)
         self.start_time = datetime.now(timezone.utc)
         self.message = None
         self.update_task = None
