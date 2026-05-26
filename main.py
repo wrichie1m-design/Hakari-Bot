@@ -34,10 +34,10 @@ def parse_amount(amount_str: str):
     mult = {
         'k': 1_000, 'm': 1_000_000, 'b': 1_000_000_000, 't': 1_000_000_000_000,
         'q': 1_000_000_000_000_000, 'Q': 1_000_000_000_000_000_000,
-        'sx': 1_000_000_000_000_000_000_000, 'sp': 1_000_000_000_000_000_000_000_000,
-        'oc': 1_000_000_000_000_000_000_000_000_000,
-        'no': 1_000_000_000_000_000_000_000_000_000_000,
-        'dc': 1_000_000_000_000_000_000_000_000_000_000_000,
+        'sx': 1_000_000_000_000_000_000, 'sp': 1_000_000_000_000_000_000_000,
+        'oc': 1_000_000_000_000_000_000_000_000,
+        'no': 1_000_000_000_000_000_000_000_000_000,
+        'dc': 1_000_000_000_000_000_000_000_000_000_000,
         'udc': 10**36, 'ddc': 10**39, 'tdc': 10**42, 'qadc': 10**45,
         'qidc': 10**48, 'sxdc': 10**51, 'spdc': 10**54, 'ocdc': 10**57,
         'nodc': 10**60, 'vgdc': 10**63,
@@ -1769,7 +1769,7 @@ async def pending(ctx):
     await ctx.send(msg)
 
 # ==================================================
-# LEADERBOARDS (paginated)
+# LEADERBOARDS (paginated) - FIXED: no await inside non-async builder
 # ==================================================
 @bot.command(name="globalleaderboard", aliases=["glb"])
 @economy_check()
@@ -1783,29 +1783,39 @@ async def glb(ctx, category: str = "money"):
                     rows = await cur.fetchall()
                 leaderboard = [(uid, int(m), int(b), int(m)+int(b)) for uid,m,b in rows if int(m)+int(b)>0]
                 leaderboard.sort(key=lambda x: x[3], reverse=True)
-                all_entries = leaderboard; title = "🌍 Global Richest"
+                all_entries = leaderboard
+                title = "🌍 Global Richest"
             else:
                 async with db.execute("SELECT user_id, total_xp FROM users WHERE total_xp>0 ORDER BY total_xp DESC") as cur:
                     rows = await cur.fetchall()
-                all_entries = [(uid, 0, 0, xp) for uid, xp in rows]; title = "🌍 Global Top XP"
+                all_entries = [(uid, 0, 0, xp) for uid, xp in rows]
+                title = "🌍 Global Top XP"
         if not all_entries: return await ctx.send("No data yet.")
+        # Pre-fetch user mentions
+        entries_with_mentions = []
+        for uid, wallet, bank, total in all_entries:
+            try:
+                user = await bot.fetch_user(uid)
+                mention = user.mention
+            except:
+                mention = f"<@{uid}>"
+            entries_with_mentions.append((mention, wallet, bank, total))
         per_page = 10
-        total_pages = max(1, (len(all_entries)+per_page-1)//per_page)
+        total_pages = max(1, (len(entries_with_mentions)+per_page-1)//per_page)
         current_page = 1
         def build_embed(page):
-            start = (page-1)*per_page; end = start+per_page
-            page_entries = all_entries[start:end]
+            start = (page-1)*per_page
+            end = start+per_page
+            page_entries = entries_with_mentions[start:end]
             embed = discord.Embed(title=title, color=0x9b59b6)
             desc = ""
-            for i, (uid, wallet, bank, total) in enumerate(page_entries, start+1):
-                try: user = await bot.fetch_user(uid); mention = user.mention
-                except: mention = f"<@{uid}>"
+            for i, (mention, wallet, bank, total) in enumerate(page_entries, start+1):
                 if category=="money":
                     desc += f"**{i}.** {mention}, **{format_number(total)}{emoji}** ({format_number(wallet)}{emoji} wallet · {format_number(bank)}{emoji} bank)\n"
                 else:
                     desc += f"**{i}.** {mention}, **{format_number(total)} XP**\n"
             embed.description = desc
-            embed.set_footer(text=f"Page {page}/{total_pages} · {len(all_entries)} users")
+            embed.set_footer(text=f"Page {page}/{total_pages} · {len(entries_with_mentions)} users")
             return embed
         embed = build_embed(current_page)
         if total_pages==1: return await ctx.send(embed=embed)
@@ -1827,7 +1837,8 @@ async def glb(ctx, category: str = "money"):
                 for child in self.children: child.disabled=True
                 await self.message.edit(view=self)
         view = LeaderboardView()
-        msg = await ctx.send(embed=embed, view=view); view.message=msg
+        msg = await ctx.send(embed=embed, view=view)
+        view.message = msg
     except Exception as e:
         await ctx.send(f"Error loading leaderboard: {e}")
 
@@ -1843,30 +1854,52 @@ async def slb(ctx, category: str = "money"):
             for m in members:
                 ud = await get_user(m.id)
                 total = ud['money']+ud['bank']
-                if total>0: data.append((m.id, m.display_name, ud['money'], ud['bank'], total))
-            data.sort(key=lambda x: x[4], reverse=True); all_entries=data; title = f"📊 Server Richest – {ctx.guild.name}"
+                if total>0:
+                    data.append((m.id, ud['money'], ud['bank'], total))
+            data.sort(key=lambda x: x[3], reverse=True)
+            all_entries = data
+            title = f"📊 Server Richest – {ctx.guild.name}"
         else:
             async with aiosqlite.connect("hakari.db") as db:
                 data = []
                 for m in members:
                     async with db.execute("SELECT total_xp FROM users WHERE user_id=?", (m.id,)) as cur:
                         row = await cur.fetchone()
-                    if row and row[0]>0: data.append((m.id, m.display_name, 0, 0, row[0]))
-            data.sort(key=lambda x: x[4], reverse=True); all_entries=data; title = f"📊 Server Top XP – {ctx.guild.name}"
+                    if row and row[0]>0:
+                        data.append((m.id, row[0]))
+            data.sort(key=lambda x: x[1], reverse=True)
+            all_entries = [(uid, 0, 0, xp) for uid, xp in data]
+            title = f"📊 Server Top XP – {ctx.guild.name}"
         if not all_entries: return await ctx.send("No data yet.")
-        per_page=10; total_pages=max(1,(len(all_entries)+per_page-1)//per_page)
+        # Pre-fetch mentions
+        entries_with_mentions = []
+        for item in all_entries:
+            if category=="money":
+                uid, wallet, bank, total = item
+            else:
+                uid, wallet, bank, total = item  # wallet,bank are 0
+            try:
+                user = await bot.fetch_user(uid)
+                mention = user.mention
+            except:
+                mention = f"<@{uid}>"
+            entries_with_mentions.append((mention, wallet, bank, total))
+        per_page=10
+        total_pages=max(1,(len(entries_with_mentions)+per_page-1)//per_page)
         current_page=1
         def build_embed(page):
-            start=(page-1)*per_page; end=start+per_page
-            page_entries=all_entries[start:end]
+            start=(page-1)*per_page
+            end=start+per_page
+            page_entries=entries_with_mentions[start:end]
             embed = discord.Embed(title=title, color=0x9b59b6)
             desc=""
-            for i,(uid,name,wallet,bank,total) in enumerate(page_entries, start+1):
+            for i,(mention,wallet,bank,total) in enumerate(page_entries, start+1):
                 if category=="money":
-                    desc += f"**{i}.** <@{uid}>, **{format_number(total)}{emoji}** ({format_number(wallet)}{emoji} wallet · {format_number(bank)}{emoji} bank)\n"
+                    desc += f"**{i}.** {mention}, **{format_number(total)}{emoji}** ({format_number(wallet)}{emoji} wallet · {format_number(bank)}{emoji} bank)\n"
                 else:
-                    desc += f"**{i}.** <@{uid}>, **{format_number(total)} XP**\n"
-            embed.description=desc; embed.set_footer(text=f"Page {page}/{total_pages} · {len(all_entries)} users")
+                    desc += f"**{i}.** {mention}, **{format_number(total)} XP**\n"
+            embed.description=desc
+            embed.set_footer(text=f"Page {page}/{total_pages} · {len(entries_with_mentions)} users")
             return embed
         embed = build_embed(current_page)
         if total_pages==1: return await ctx.send(embed=embed)
@@ -1888,7 +1921,8 @@ async def slb(ctx, category: str = "money"):
                 for child in self.children: child.disabled=True
                 await self.message.edit(view=self)
         view = LeaderboardView()
-        msg = await ctx.send(embed=embed, view=view); view.message=msg
+        msg = await ctx.send(embed=embed, view=view)
+        view.message = msg
     except Exception as e:
         await ctx.send(f"Error loading leaderboard: {e}")
 
@@ -1901,9 +1935,12 @@ async def top_couples(ctx):
     if not rows: return await ctx.send("No couples.")
     embed = discord.Embed(title="Top Couples", color=0xe91e63)
     for i, (uid, sid, aff) in enumerate(rows, 1):
-        try: u = await bot.fetch_user(uid); s = await bot.fetch_user(sid)
-        except: continue
-        embed.add_field(name=f"{i}. {u.display_name} & {s.display_name}", value=f"{format_number(aff)} affection", inline=False)
+        try:
+            u = await bot.fetch_user(uid)
+            s = await bot.fetch_user(sid)
+            embed.add_field(name=f"{i}. {u.display_name} & {s.display_name}", value=f"{format_number(aff)} affection", inline=False)
+        except:
+            continue
     await ctx.send(embed=embed)
 
 @bot.command(name="level", aliases=["rank"])
@@ -1965,19 +2002,28 @@ async def global_invites(ctx):
         async with db.execute("SELECT user_id, invite_count FROM users WHERE invite_count > 0 ORDER BY invite_count DESC") as cur:
             rows = await cur.fetchall()
     if not rows: return await ctx.send("No invite data yet.")
-    per_page=10; total_pages=max(1,(len(rows)+per_page-1)//per_page)
+    # Pre-fetch mentions
+    entries = []
+    for uid, count in rows:
+        try:
+            user = await bot.fetch_user(uid)
+            mention = user.mention
+        except:
+            mention = f"<@{uid}>"
+        entries.append((mention, count))
+    per_page=10
+    total_pages=max(1,(len(entries)+per_page-1)//per_page)
     current_page=1
     def build_embed(page):
-        start=(page-1)*per_page; end=start+per_page
-        page_entries=rows[start:end]
+        start=(page-1)*per_page
+        end=start+per_page
+        page_entries=entries[start:end]
         embed = discord.Embed(title="📨 Invite Leaderboard", color=0x9b59b6)
         desc=""
-        for i,(uid,count) in enumerate(page_entries, start+1):
-            try: user = await bot.fetch_user(uid); mention=user.mention
-            except: mention=f"<@{uid}>"
+        for i,(mention,count) in enumerate(page_entries, start+1):
             desc += f"**{i}.** {mention}: **{count}** invites\n"
         embed.description=desc
-        embed.set_footer(text=f"Page {page}/{total_pages} · {len(rows)} users")
+        embed.set_footer(text=f"Page {page}/{total_pages} · {len(entries)} users")
         return embed
     embed=build_embed(current_page)
     if total_pages==1: return await ctx.send(embed=embed)
@@ -1999,7 +2045,8 @@ async def global_invites(ctx):
             for child in self.children: child.disabled=True
             await self.message.edit(view=self)
     view = LeaderboardView()
-    msg = await ctx.send(embed=embed, view=view); view.message=msg
+    msg = await ctx.send(embed=embed, view=view)
+    view.message = msg
 
 @bot.command(name="setinvitereward", aliases=["sir"])
 @owner_only()
