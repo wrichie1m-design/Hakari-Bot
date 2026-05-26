@@ -383,14 +383,16 @@ async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 # ==================================================
-# ECONOMY COMMANDS (with all/half support)
+# ECONOMY COMMANDS
 # ==================================================
 @bot.command(name="bal", aliases=["balance"])
 @economy_check()
-async def balance(ctx):
-    data = await get_user(ctx.author.id)
+async def balance(ctx, user: discord.User = None):
+    if user is None:
+        user = ctx.author
+    data = await get_user(user.id)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    embed = discord.Embed(title=f"{ctx.author.display_name}'s Balance", color=0x2ecc71)
+    embed = discord.Embed(title=f"{user.display_name}'s Balance", color=0x2ecc71)
     embed.add_field(name="Wallet", value=f"{format_number(data['money'])} {emoji}", inline=True)
     embed.add_field(name="Bank", value=f"{format_number(data['bank'])} {emoji}", inline=True)
     embed.add_field(name="Total", value=f"{format_number(data['money']+data['bank'])} {emoji}", inline=False)
@@ -2608,11 +2610,13 @@ async def set_invite_reward(ctx, invites: int, amount_str: str):
     await ctx.send(f"Invite reward set: {invites} invites = {format_number(amount)}{emoji}")
 
 # ==================================================
-# OWNER COMMANDS
+# OWNER COMMANDS (FIXED .removemoney with all/half)
 # ==================================================
 @bot.command(name="addmoney")
 @owner_only()
 async def addmoney(ctx, user: discord.User, amount_str: str):
+    if amount_str.lower() == "all":
+        return await ctx.send("Cannot add 'all' – use a specific amount.")
     try: amt = parse_amount(amount_str)
     except: return await ctx.send("Invalid amount.")
     await update_money(user.id, amt)
@@ -2622,23 +2626,40 @@ async def addmoney(ctx, user: discord.User, amount_str: str):
 @bot.command(name="removemoney")
 @owner_only()
 async def removemoney(ctx, user: discord.User, amount_str: str):
-    try: amt = parse_amount(amount_str)
-    except: return await ctx.send("Invalid amount.")
     cur = await get_user(user.id)
     total = cur['money'] + cur['bank']
-    if total == 0: return await ctx.send(f"{user.mention} has 0 coins total.")
-    if amt > total:
-        await update_money(user.id, -cur['money']); await update_bank(user.id, -cur['bank'])
-        await ctx.send(f"{user.mention} only had {format_number(total)} coins total. Removed all.")
+    
+    if amount_str.lower() == "all":
+        amt = total
+    elif amount_str.lower() == "half":
+        amt = total // 2
     else:
-        if cur['money'] >= amt:
-            await update_money(user.id, -amt); removed_from = "wallet"
-        else:
-            await update_money(user.id, -cur['money']); remaining = amt - cur['money']
-            await update_bank(user.id, -remaining)
-            removed_from = f"wallet ({format_number(cur['money'])}) and bank ({format_number(remaining)})"
-        emoji = await get_setting(ctx.guild.id, "currency_emoji")
-        await ctx.send(f"Removed {format_number(amt)}{emoji} from {user.mention} (from {removed_from}).")
+        try: amt = parse_amount(amount_str)
+        except: return await ctx.send("Invalid amount.")
+    
+    if amt <= 0:
+        return await ctx.send("Amount must be positive.")
+    
+    if total == 0:
+        return await ctx.send(f"{user.mention} has 0 coins total.")
+    
+    if amt > total:
+        amt = total
+    
+    # Try to take from wallet first, then bank
+    if cur['money'] >= amt:
+        await update_money(user.id, -amt)
+        removed_from = "wallet"
+    else:
+        taken_from_wallet = cur['money']
+        remaining = amt - cur['money']
+        await update_money(user.id, -cur['money'])
+        await update_bank(user.id, -remaining)
+        removed_from = f"wallet ({format_number(taken_from_wallet)}) and bank ({format_number(remaining)})"
+    
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    await ctx.send(f"Removed {format_number(amt)}{emoji} from {user.mention} (from {removed_from}).")
+    await log_action(ctx.author.id, "RemoveMoney", f"Removed {amt} from {user.id}")
 
 @bot.command(name="setmoney")
 @owner_only()
@@ -2653,6 +2674,8 @@ async def setmoney(ctx, user: discord.User, amount_str: str):
 @bot.command(name="addbank")
 @owner_only()
 async def addbank(ctx, user: discord.User, amount_str: str):
+    if amount_str.lower() in ["all", "half"]:
+        return await ctx.send("Cannot use all/half for bank – use a specific amount.")
     try: amt = parse_amount(amount_str)
     except: return await ctx.send("Invalid amount.")
     await update_bank(user.id, amt)
@@ -2662,16 +2685,30 @@ async def addbank(ctx, user: discord.User, amount_str: str):
 @bot.command(name="removebank")
 @owner_only()
 async def removebank(ctx, user: discord.User, amount_str: str):
-    try: amt = parse_amount(amount_str)
-    except: return await ctx.send("Invalid amount.")
     cur = await get_user(user.id)
-    if cur['bank'] < amt:
-        await update_bank(user.id, -cur['bank'])
-        await ctx.send(f"{user.mention} only had {format_number(cur['bank'])} in bank. Removed all.")
+    bank = cur['bank']
+    
+    if amount_str.lower() == "all":
+        amt = bank
+    elif amount_str.lower() == "half":
+        amt = bank // 2
     else:
-        await update_bank(user.id, -amt)
-        emoji = await get_setting(ctx.guild.id, "currency_emoji")
-        await ctx.send(f"Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
+        try: amt = parse_amount(amount_str)
+        except: return await ctx.send("Invalid amount.")
+    
+    if amt <= 0:
+        return await ctx.send("Amount must be positive.")
+    
+    if bank == 0:
+        return await ctx.send(f"{user.mention} has 0 coins in bank.")
+    
+    if amt > bank:
+        amt = bank
+    
+    await update_bank(user.id, -amt)
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    await ctx.send(f"Removed {format_number(amt)}{emoji} from {user.mention}'s bank.")
+    await log_action(ctx.author.id, "RemoveBank", f"Removed {amt} from {user.id}")
 
 @bot.command(name="avt")
 @owner_only()
@@ -2903,7 +2940,7 @@ class OwnerHelpView(discord.ui.View):
 async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
-        discord.Embed(title="Economy (1/8)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/half/1k>\n.with <all/half/1k>\n.pay @user <all/half/amount>\n.rob @user (1h)\n.interest\n.security <hours>", inline=False),
+        discord.Embed(title="Economy (1/8)", color=0x3498db).add_field(name="Commands", value=f".bal [@user] - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/half/1k>\n.with <all/half/1k>\n.pay @user <all/half/amount>\n.rob @user (1h)\n.interest\n.security <hours>", inline=False),
         discord.Embed(title="Loans (2/8)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount>\n.repay <all/half/amount>\n.loaninfo", inline=False),
         discord.Embed(title="Gambling (3/8)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines>\n.tower <amount>\n.roulette <amount> <bet>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>\n.rps <amount>\n.plinko <amount> [risk] [rows]\n.baccarat <amount> <bet> (1.2x)\n.wordle <amount> [easy/medium/hard] (5 tries, 5min)", inline=False),
         discord.Embed(title="Shop & Business (4/8)", color=0x2ecc71).add_field(name="Commands", value=".cs <name>\n.asi <price> <item>\n.rsi <item>\n.ms\n.vs @user\n.bfs @user <item>\n.cls\n.gm\n.bb <type>\n.biz\n.ub\n.cp\n.db\n.sb", inline=False),
@@ -2918,7 +2955,7 @@ async def help_cmd(ctx):
 @owner_only()
 async def owner_commands_cmd(ctx):
     pages = [
-        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]\n.sst @user\n.sir <invites> <amount>\n.addinvites @user <amount>", inline=False),
+        discord.Embed(title="Owner Commands (1/2)", color=0xe74c3c).add_field(name="Economy", value=".addmoney @user <amount>\n.removemoney @user <all/half/amount>\n.setmoney @user <amount>\n.addbank @user <amount>\n.removebank @user <all/half/amount>\n.economywipe\n.toggleeconomy\n.togglerob\n.togglegambling\n.setdailyamount <amount>\n.setcurrency <emoji>\n.rewardlast <amount> [count]\n.sst @user\n.sir <invites> <amount>\n.addinvites @user <amount>", inline=False),
         discord.Embed(title="Owner Commands (2/2)", color=0xe74c3c).add_field(name="Protection & Logs", value=".protect @user\n.unprotect @user\n.blacklist @user\n.whitelist @user\n.avt @user\n.addaffection @user <amount>\n.setaffection @user <amount>\n.logs [limit]\n\nOwner Management\n.addowner <@user/ID>\n.removeowner <@user/ID>\n.ownerlist", inline=False)
     ]
     await ctx.send(embed=pages[0], view=OwnerHelpView(ctx, pages))
