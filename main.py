@@ -29,8 +29,8 @@ active_wordle_games = {}
 # NUMBER FORMATTING
 # ==================================================
 def parse_amount(amount_str: str):
-    if amount_str.lower() == "all":
-        return "all"
+    if amount_str.lower() in ["all", "half"]:
+        return amount_str.lower()
     amount_str = amount_str.lower().strip()
     mult = {
         'k': 1_000, 'm': 1_000_000, 'b': 1_000_000_000, 't': 1_000_000_000_000,
@@ -59,6 +59,8 @@ def parse_amount(amount_str: str):
         raise ValueError("Invalid amount")
 
 def format_number(num: int) -> str:
+    if num < 0:
+        return "0"
     if num < 1_000:
         return str(num)
     tiers = [
@@ -251,6 +253,8 @@ async def update_money(uid, amount):
             row = await cur.fetchone()
         cur_money = int(row[0]) if row else 0
         new = cur_money + amount
+        if new < 0:
+            new = 0
         await db.execute("UPDATE users SET money=? WHERE user_id=?", (str(new), uid))
         await db.commit()
         if amount > 0:
@@ -262,6 +266,8 @@ async def update_bank(uid, amount):
             row = await cur.fetchone()
         cur_bank = int(row[0]) if row else 0
         new = cur_bank + amount
+        if new < 0:
+            new = 0
         await db.execute("UPDATE users SET bank=? WHERE user_id=?", (str(new), uid))
         await db.commit()
 
@@ -331,13 +337,20 @@ async def add_xp(uid, amount):
 
 async def get_bet_amount(ctx, amt_str, check=True):
     data = await get_user(ctx.author.id)
-    if amt_str.lower()=="all": amount = data['money']
+    if amt_str.lower() == "all":
+        amount = data['money']
+    elif amt_str.lower() == "half":
+        amount = data['money'] // 2
     else:
-        try: amount = parse_amount(amt_str)
-        except: return None,"Invalid amount."
-    if amount<=0: return None,"Positive amount required."
-    if check and data['money']<amount: return None,f"You have {format_number(data['money'])} coins."
-    return amount,None
+        try:
+            amount = parse_amount(amt_str)
+        except:
+            return None, "Invalid amount."
+    if amount <= 0:
+        return None, "Positive amount required."
+    if check and data['money'] < amount:
+        return None, f"You have {format_number(data['money'])} coins."
+    return amount, None
 
 def economy_check():
     async def pred(ctx):
@@ -370,7 +383,7 @@ async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 # ==================================================
-# ECONOMY COMMANDS (all fixed, .with all works)
+# ECONOMY COMMANDS (with all/half support)
 # ==================================================
 @bot.command(name="bal", aliases=["balance"])
 @economy_check()
@@ -402,11 +415,15 @@ async def withdraw(ctx, amount_str: str):
     data = await get_user(ctx.author.id)
     if amount_str.lower() == "all":
         amount = data['bank']
-        if amount <= 0:
-            return await ctx.send("Your bank is empty.")
+    elif amount_str.lower() == "half":
+        amount = data['bank'] // 2
     else:
-        amount, err = await get_bet_amount(ctx, amount_str, check=False)
-        if err: return await ctx.send(err)
+        try:
+            amount = parse_amount(amount_str)
+        except:
+            return await ctx.send("Invalid amount.")
+    if amount <= 0:
+        return await ctx.send("Your bank is empty." if amount == 0 else "Amount must be positive.")
     max_withdraw = await get_setting(ctx.guild.id, "max_withdraw")
     if amount > max_withdraw and max_withdraw != 0:
         return await ctx.send(f"Maximum withdraw is {format_number(max_withdraw)} coins.")
@@ -1564,7 +1581,7 @@ async def rps(ctx, amount_str: str):
     await ctx.send("Choose your move:", view=view)
 
 # ==================================================
-# PLINKO (IMPROVED STYLE)
+# PLINKO (FIXED DISPLAY & MATH)
 # ==================================================
 class PlinkoGame:
     def __init__(self, ctx, bet, rows, risk):
@@ -1616,29 +1633,27 @@ class PlinkoGame:
             row_chars = []
             for c in range(pegs):
                 if step == r and c == self.ball_path[r]:
-                    row_chars.append("●")
+                    row_chars.append("🔴")
                 else:
-                    row_chars.append("○")
+                    row_chars.append("⚪")
             padding = self.rows - r
-            row_str = " " * padding + " ".join(row_chars)
+            row_str = "  " * padding + "  ".join(row_chars)
             rows_str.append(row_str)
         slot_row = []
         for c in range(self.rows + 1):
             mult = self.multipliers[c]
             if step == self.rows and c == self.ball_path[-1]:
-                slot_row.append(f"●{mult}x")
+                slot_row.append(f"🔴{mult}x")
             else:
-                slot_row.append(f"{mult}x")
-        rows_str.append(" ".join(slot_row))
-        return f"```\n" + "\n".join(rows_str) + "\n```"
+                slot_row.append(f" {mult}x")
+        rows_str.append("".join(slot_row))
+        return "```\n" + "\n".join(rows_str) + "\n```"
 
     async def animate(self, message):
         for step in range(self.rows + 1):
             board_str = self.render_board(step)
             await message.edit(content=f"🎱 **Plinko Drop**\n{board_str}")
-            await asyncio.sleep(0.35)
-        final_board = self.render_board(self.rows)
-        await message.edit(content=f"🎱 **Plinko Drop**\n{final_board}")
+            await asyncio.sleep(0.4)
 
 @bot.command(name="plinko")
 @economy_check()
@@ -1667,32 +1682,111 @@ async def plinko(ctx, amount_str: str, risk: str = "medium", rows: int = 12):
         await update_money(ctx.author.id, amount)
         result_text = "🔵 Multiplier 1x – you get your bet back."
     else:
-        result_text = f"🔴 Lost! Multiplier x{multiplier}, lost {format_number(amount - win_amount)}{emoji}."
+        lost_amount = amount - win_amount
+        result_text = f"🔴 Lost! Multiplier x{multiplier}, lost {format_number(lost_amount)}{emoji}."
     await msg.edit(content=f"{msg.content}\n{result_text}")
     await set_gambling_cooldown(ctx.author.id)
 
 # ==================================================
-# WORDLE BETTING GAME
+# WORDLE BETTING GAME (5 tries, 5 minute timeout, expanded words)
 # ==================================================
-WORD_LIST = [
-    "apple", "brain", "crane", "drake", "flame", "grape", "house", "juice", "knife", "lemon",
-    "mango", "noble", "ocean", "pearl", "queen", "river", "stone", "tiger", "ultra", "viper",
-    "whale", "youth", "zebra", "angel", "beach", "cloud", "daisy", "eagle", "frost", "giant",
-    "honey", "ivory", "jolly", "koala", "laser", "magic", "novel", "olive", "piano", "quest",
-    "raven", "sugar", "tulip", "unity", "vivid", "witch", "xenon", "yeast", "zonal", "amber",
-    "blaze", "coral", "dandy", "elite", "flora", "ghost", "happy", "igloo", "jumbo", "kayak",
-    "lunar", "mocha", "nylon", "opera", "prism", "quake", "rusty", "savvy", "thyme", "umbra",
-    "valve", "waltz", "xerox", "yacht", "zesty", "alpha", "bravo", "crisp", "delta", "ember"
+easy_words = [
+    "apple","beach","bread","chair","cloud","dance","dream","earth","flame","fruit",
+    "ghost","grape","green","happy","heart","honey","house","juice","light","magic",
+    "mango","metal","money","music","ocean","piano","pizza","plant","queen","radio",
+    "river","robot","sheep","smile","snake","sound","space","spoon","stone","storm",
+    "sugar","sunny","table","tiger","toast","tower","train","truck","water","whale",
+    "world","young","zebra","angel","candy","coral","daisy","eagle","frost","giant",
+    "jelly","kitty","laser","olive","pearl","raven","tulip","unity","vivid","witch",
+    "yeast","zesty","blaze","crisp","ember","flora","happy","igloo","jumbo","kayak",
+    "lunar","opera","prism","rusty","savvy","thyme","valve","youth","amber","bravo",
+    "delta","elite","globe","grill","honor","ivory","joker","kneel","lemon","mocha",
+    "novel","punch","quiet","royal","shine","sword","tempo","urban","vapor","wagon"
 ]
-GUESS_TIMEOUT = 120
+
+medium_words = [
+    "adobe","agile","aisle","alley","amuse","arena","argue","armor","aroma","arrow",
+    "atlas","attic","badge","bagel","banjo","basil","berry","bison","black","blink",
+    "bloom","blush","booth","briar","brick","bride","broom","brown","brush","cabin",
+    "camel","cargo","carve","cedar","chain","charm","chess","chili","chime","cider",
+    "civic","clash","clerk","climb","cloak","clock","clown","cobra","comet","couch",
+    "crown","curve","demon","diner","dodge","donut","draft","drake","dress","drift",
+    "eager","ebony","elect","enjoy","envoy","epoch","equal","faith","fancy","feast",
+    "ferry","fiber","field","finch","flash","fleet","float","focus","forge","frame",
+    "fresh","fuzzy","gamer","gauge","glade","glory","glyph","grace","grasp","grove",
+    "guard","guest","habit","haste","hazel","hinge","hobby","hover","human","humor",
+    "ideal","infer","joker","judge","karma","kebab","knack","label","latch","layer",
+    "linen","liver","logic","lotus","lucky","marsh","medal","mercy","mimic","miner",
+    "minty","model","moral","motor","mount","mouse","naive","naval","nerve","ninja",
+    "noble","north","nylon","oasis","orbit","organ","otter","paint","panel","panic",
+    "party","patch","phase","pilot","pixel","plaid","plaza","plush","poise","poppy",
+    "power","pride","proxy","pupil","quake","query","quest","quick","radar","ranch",
+    "rapid","relay","rhyme","rogue","ruler","saint","scale","scent","scope","screw",
+    "shark","shelf","shock","shore","skate","skill","slate","smoke","snack","solar",
+    "spark","spice","spike","sport","spray","squad","stack","steam","steel","story",
+    "straw","style","swift","tempo","terra","torch","track","trade","trail","tribe",
+    "trick","trust","ultra","umbra","union","urban","vault","velvet","venue","verse",
+    "vigor","vinyl","viral","vocal","weave","weird","wheat","widow","winds","wrist",
+    "xenon","xylem","zippy","zonal"
+]
+
+hard_words = [
+    "aback","abyss","affix","axiom","azure","balmy","banal","bicep","bluff","boozy",
+    "cairn","crypt","cycle","dizzy","dwarf","eject","ennui","equip","exist","fjord",
+    "fluff","gauze","ghoul","gnash","gnome","guile","gypsy","haiku","hymen","ivied",
+    "jaunt","jazzy","jiffy","jumpy","khaki","llama","lymph","mauve","midge","nymph",
+    "ovoid","oxide","prawn","psyche","puffy","quack","quail","qualm","quart","queue",
+    "quill","quirk","quota","rabid","rowdy","saucy","scoff","shyly","slyly","smirk",
+    "snarl","sphinx","squib","stoic","swirl","throb","topaz","toxic","trawl","tryst",
+    "vixen","vodka","voodoo","wacky","whack","wimpy","woken","wrath","wreck","yokel",
+    "zilch","vexed","waxen","boxer","knoll","lilac","morph","nudge","ozone","quasi",
+    "rumba","taboo","udder","woven","yearn","adieu","aegis","afire","aglow","alcove",
+    "amiss","anvil","aping","ardor","ashen","askew","atoll","augur","axial","bawdy",
+    "beget","bilge","binge","biome","bleak","blimp","blurt","bongo","borax","bosom",
+    "bough","brace","brash","broil","brunt","bugle","bulge","buxom","cache","cagey",
+    "calyx","caper","carat","carom","caste","caulk","chaff","chard","chock","civet",
+    "clank","clove","coyly","cramp","crimp","croak","croup","curio","cutup","debar",
+    "decry","deign","deity","delve","demur","dirge","dowel","droll","drool","druid",
+    "dryly","duchy","duvet","edict","egret","elude","emcee","endow","enema","epoxy",
+    "erode","ether","ethic","ethos","etude","evade","evoke","exalt","exile","extol",
+    "facet","fakir","farce","fecal","feral","ferny","firth","fixer","flail","flask",
+    "flint","fluke","foamy","forgo","forte","frock","fugue","fungi","furor","gawky",
+    "gazer","gecko","genie","girth","glint","gnarl","gouge","grimy","gruel","gulch",
+    "gusty","gusto","harem","harpy","helix","hippo","hoard","hovel","hulky","hydra",
+    "hyena","idler","idyll","imbue","impel","inane","inept","inert","ingot","irked",
+    "itchy","jerky","jewel","junta","kaput","kiosk","knave","knead","lapel","larva",
+    "lathe","leech","lemur","libel","lingo","lithe","loamy","loath","locus","lunge",
+    "lupus","lusty","macro","madam","magma","mangy","manic","manor","melee","mirth",
+    "mogul","moldy","moult","mucus","mural","mushy","myrrh","nadir","nasal","natal",
+    "neigh","niche","nobly","oaken","obese","odium","offal","olden","omega","onset",
+    "opine","ovary","ovate","pagan","parry","pasty","patsy","penne","peril","pesky",
+    "petal","phony","piety","pinto","pique","pivot","plunk","poesy","polyp","poser",
+    "posse","prank","preen","privy","psalm","pudgy","pulpy","purge","quark","quash",
+    "quell","quern","quilt","quoit","rabbi","raspy","retch","rhomb","rivet","roomy",
+    "rouge","runic","sable","salve","savoy","scald","scamp","scion","scurf","sepia",
+    "serif","shard","sheik","shrew","silky","sinew","skulk","slosh","slunk","smote",
+    "snide","snuff","soggy","sonar","spasm","speck","spiel","spiny","spore","spurn",
+    "stilt","stint","stoop","stork","sully","swami","swash","swine","synod","tacit",
+    "taffy","tangy","tenet","tepid","thorn","thrum","tilde","tinge","tithe","toddy",
+    "token","tonic","torus","totem","tunic","twang","ulcer","unfed","unfit","usher",
+    "vapid","venom","vicar","vogue","wafer","warty","weary","wharf","whelp","wince",
+    "woozy","wring","wryly","yield","yodel"
+]
+
+GUESS_TIMEOUT = 300  # 5 minutes
 
 class WordleGame:
     def __init__(self, ctx, bet, difficulty):
         self.ctx = ctx
         self.bet = bet
         self.difficulty = difficulty
-        self.word = random.choice(WORD_LIST)
-        self.guesses_left = 6
+        if difficulty == "easy":
+            self.word = random.choice(easy_words)
+        elif difficulty == "hard":
+            self.word = random.choice(hard_words)
+        else:
+            self.word = random.choice(medium_words)
+        self.guesses_left = 5
         self.won = False
         self.message = None
 
@@ -1725,8 +1819,8 @@ class WordleGame:
         embed.add_field(name="Difficulty", value=self.difficulty.capitalize(), inline=True)
         embed.add_field(name="Bet", value=f"{format_number(self.bet)} {emoji}", inline=True)
         embed.add_field(name="Multiplier", value=f"{self.get_multiplier()}x", inline=True)
-        embed.add_field(name="Guesses", value="6", inline=False)
-        embed.set_footer(text=f"Type your 5-letter guess in chat. {GUESS_TIMEOUT}s timeout.")
+        embed.add_field(name="Guesses", value="5", inline=False)
+        embed.set_footer(text=f"Type your 5-letter guess in chat. 5 minute timeout!")
         self.message = await self.ctx.send(embed=embed)
 
     async def guess(self, guess: str):
@@ -1777,7 +1871,7 @@ async def wordle(ctx, amount_str: str, difficulty: str = "medium"):
         try:
             msg = await bot.wait_for("message", timeout=GUESS_TIMEOUT, check=check)
         except asyncio.TimeoutError:
-            await ctx.send(f"⏰ Time's up! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
+            await ctx.send(f"⏰ 5 minute timeout! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
             break
         if msg.content.lower().startswith("."):
             continue
@@ -1796,7 +1890,7 @@ async def wordle(ctx, amount_str: str, difficulty: str = "medium"):
     await set_gambling_cooldown(ctx.author.id)
 
 # ==================================================
-# Baccarat
+# Baccarat (1.2x multiplier)
 # ==================================================
 @bot.command(name="baccarat", aliases=["bac"])
 @economy_check()
@@ -1823,7 +1917,7 @@ async def baccarat(ctx, amount_str: str, bet_on: str = None):
     if result == bet_on:
         win = True
         if bet_on == 'tie': payout = amount * 8
-        else: payout = amount * 2
+        else: payout = int(amount * 1.2)
     if win:
         await update_money(ctx.author.id, payout)
         msg = f"Player: {player_val}, Banker: {banker_val}. {result.capitalize()} wins! You won {format_number(payout - amount)}{emoji}!"
@@ -2164,8 +2258,15 @@ async def affection(ctx, user: discord.User = None):
 @bot.command(name="gift")
 @economy_check()
 async def gift(ctx, user: discord.User, amount_str: str):
-    try: amount = parse_amount(amount_str)
-    except: return await ctx.send("Invalid amount.")
+    if amount_str.lower() == "all":
+        data = await get_user(ctx.author.id)
+        amount = data['money']
+    elif amount_str.lower() == "half":
+        data = await get_user(ctx.author.id)
+        amount = data['money'] // 2
+    else:
+        try: amount = parse_amount(amount_str)
+        except: return await ctx.send("Invalid amount.")
     if amount<=0 or user == ctx.author: return
     data = await get_user(ctx.author.id)
     if data['money'] < amount: return await ctx.send(f"You have {format_number(data['money'])} coins.")
@@ -2802,13 +2903,13 @@ class OwnerHelpView(discord.ui.View):
 async def help_cmd(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     pages = [
-        discord.Embed(title="Economy (1/8)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/1k>\n.with <all/1k>\n.pay @user <amount/all>\n.rob @user (1h)\n.interest\n.security <hours>", inline=False),
+        discord.Embed(title="Economy (1/8)", color=0x3498db).add_field(name="Commands", value=f".bal - balance\n.daily - {emoji}1500 (10 msg)\n.work - {emoji}150-300 (5m)\n.sleep - {emoji}2000-2500 (8h)\n.crime - {emoji}200-800 (15m)\n.dep <all/half/1k>\n.with <all/half/1k>\n.pay @user <all/half/amount>\n.rob @user (1h)\n.interest\n.security <hours>", inline=False),
         discord.Embed(title="Loans (2/8)", color=0x9b59b6).add_field(name="Commands", value=".loan <amount>\n.repay <all/half/amount>\n.loaninfo", inline=False),
-        discord.Embed(title="Gambling (3/8)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines>\n.tower <amount>\n.roulette <amount> <bet>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>\n.rps <amount>\n.plinko <amount> [risk] [rows]\n.baccarat <amount> <bet>\n.wordle <amount> [easy/medium/hard]", inline=False),
+        discord.Embed(title="Gambling (3/8)", color=0xf1c40f).add_field(name="Games", value=".cf <amount> [heads/tails]\n.slots <amount>\n.bj <amount>\n.crash <amount>\n.mines <amount> <mines>\n.tower <amount>\n.roulette <amount> <bet>\n.highlow <amount> <h/l>\n.dice <amount> <1-6>\n.horserace <amount> <A/B/C/D>\n.rps <amount>\n.plinko <amount> [risk] [rows]\n.baccarat <amount> <bet> (1.2x)\n.wordle <amount> [easy/medium/hard] (5 tries, 5min)", inline=False),
         discord.Embed(title="Shop & Business (4/8)", color=0x2ecc71).add_field(name="Commands", value=".cs <name>\n.asi <price> <item>\n.rsi <item>\n.ms\n.vs @user\n.bfs @user <item>\n.cls\n.gm\n.bb <type>\n.biz\n.ub\n.cp\n.db\n.sb", inline=False),
-        discord.Embed(title="Relationships (5/8)", color=0xe91e63).add_field(name="Commands", value=".date @user\n.marry @user\n.divorce\n.affection\n.gift @user <amount>\n.adopt @user\n.children\n.family\n.leavefamily\n.pending", inline=False),
+        discord.Embed(title="Relationships (5/8)", color=0xe91e63).add_field(name="Commands", value=".date @user\n.marry @user\n.divorce\n.affection\n.gift @user <all/half/amount>\n.adopt @user\n.children\n.family\n.leavefamily\n.pending", inline=False),
         discord.Embed(title="Other (6/8)", color=0x9b59b6).add_field(name="Commands", value=".tasks\n.badges\n.bs\n.bankheist\n.lottery\n.buyticket\n.level\n.topcouples\n.glb\n.slb\n.pricepool\n.claim\n.glinv", inline=False),
-        discord.Embed(title="Wordle (7/8)", color=0x9b59b6).add_field(name="Command", value=".wordle <amount> [easy/medium/hard] - 1.5x/2x/3.5x", inline=False),
+        discord.Embed(title="Wordle (7/8)", color=0x9b59b6).add_field(name="Command", value=".wordle <amount> [easy/medium/hard] - 1.5x/2x/3.5x, 5 tries, 5 minute timeout", inline=False),
         discord.Embed(title="Plinko (8/8)", color=0x9b59b6).add_field(name="Command", value=".plinko <amount> [risk] [rows] - low/medium/high, rows 8-16", inline=False)
     ]
     await ctx.send(embed=pages[0], view=HelpView(ctx, pages))
