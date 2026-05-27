@@ -378,7 +378,195 @@ def gambling_cooldown_check():
 async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
-    # ==================================================
+# ==================================================
+# QUEST SYSTEM (Daily & Weekly)
+# ==================================================
+DAILY_QUEST_TEMPLATES = [
+    {"id":"gamble_win", "desc":"Win {target} gambling games", "target":3, "reward":25000, "type":"gamble_win"},
+    {"id":"rob", "desc":"Rob {target} people", "target":5, "reward":30000, "type":"rob"},
+    {"id":"earn", "desc":"Earn {target} coins", "target":25000, "reward":15000, "type":"earn"},
+    {"id":"work", "desc":"Use .work {target} times", "target":10, "reward":20000, "type":"work"},
+    {"id":"messages", "desc":"Send {target} messages", "target":50, "reward":10000, "type":"messages"},
+    {"id":"invite", "desc":"Invite {target} people", "target":3, "reward":250000, "type":"invite", "manual":True},
+]
+
+WEEKLY_QUEST_TEMPLATES = [
+    {"id":"big_gamble", "desc":"Win {target} gambling games", "target":30, "reward":200000, "type":"gamble_win"},
+    {"id":"big_earn", "desc":"Earn {target} coins", "target":200000, "reward":100000, "type":"earn"},
+    {"id":"big_invite", "desc":"Invite {target} people", "target":10, "reward":1000000, "type":"invite", "manual":True},
+]
+
+async def get_quests(user_id):
+    data = await get_user(user_id)
+    quest_data = json.loads(data.get('quest_data','{}'))
+    now = datetime.now(timezone.utc)
+    last_reset = data.get('quest_last_reset')
+    reset_daily = True
+    reset_weekly = True
+    if last_reset:
+        last_dt = datetime.fromisoformat(last_reset)
+        if (now - last_dt).total_seconds() < 86400:
+            reset_daily = False
+        if (now - last_dt).total_seconds() < 604800:
+            reset_weekly = False
+
+    if reset_daily:
+        quest_data['daily'] = []
+        for tmpl in DAILY_QUEST_TEMPLATES:
+            q = tmpl.copy()
+            q['progress'] = 0; q['claimed'] = False
+            quest_data['daily'].append(q)
+
+    if reset_weekly:
+        quest_data['weekly'] = []
+        for tmpl in WEEKLY_QUEST_TEMPLATES:
+            q = tmpl.copy()
+            q['progress'] = 0; q['claimed'] = False
+            quest_data['weekly'].append(q)
+
+    if not quest_data.get('daily'):
+        quest_data['daily'] = []
+        for tmpl in DAILY_QUEST_TEMPLATES:
+            q = tmpl.copy()
+            q['progress'] = 0; q['claimed'] = False
+            quest_data['daily'].append(q)
+    if not quest_data.get('weekly'):
+        quest_data['weekly'] = []
+        for tmpl in WEEKLY_QUEST_TEMPLATES:
+            q = tmpl.copy()
+            q['progress'] = 0; q['claimed'] = False
+            quest_data['weekly'].append(q)
+
+    quest_data['last_reset'] = now.isoformat()
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("UPDATE users SET quest_data=?, quest_last_reset=? WHERE user_id=?",
+                         (json.dumps(quest_data), now.isoformat(), user_id))
+        await db.commit()
+    return quest_data
+
+async def update_quest_progress(user_id, quest_type, amount=1):
+    data = await get_quests(user_id)
+    changed = False
+    for category in ('daily','weekly'):
+        for q in data.get(category,[]):
+            if q['type'] == quest_type and not q['claimed']:
+                q['progress'] = min(q['progress'] + amount, q['target'])
+                changed = True
+    if changed:
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("UPDATE users SET quest_data=? WHERE user_id=?", (json.dumps(data), user_id))
+            await db.commit()
+
+class QuestView(discord.ui.View):
+    def __init__(self, user_id, quest_data):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.quest_data = quest_data
+
+    @discord.ui.button(label="Claim Rewards", style=discord.ButtonStyle.success)
+    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("Not your quests!", ephemeral=True)
+        total_reward = 0
+        for category in ('daily','weekly'):
+            for q in self.quest_data.get(category,[]):
+                if q['progress'] >= q['target'] and not q['claimed']:
+                    q['claimed'] = True
+                    total_reward += q['reward']
+        if total_reward == 0:
+            return await interaction.response.send_message("No completed quests to claim!", ephemeral=True)
+        await update_money(self.user_id, total_reward)
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("UPDATE users SET quest_data=? WHERE user_id=?", (json.dumps(self.quest_data), self.user_id))
+            await db.commit()
+        emoji = await get_setting(interaction.guild.id, "currency_emoji")
+        await interaction.response.send_message(f"✅ Claimed {format_number(total_reward)}{emoji} from quests!", ephemeral=True)
+        await self.update_display(interaction)
+
+    async def update_display(self, interaction):
+        embed = self.build_embed()
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    def build_embed(self):
+        emoji = "💰"
+        embed = discord.Embed(title="📋 Quest Board", color=0x9b59b6)
+        if self.quest_data.get('daily'):
+            text = ""
+            for q in self.quest_data['daily']:
+                text += f"{'✅' if q['claimed'] else '▫'} {q['desc'].format(target=q['target'])}: {q['progress']}/{q['target']} ({format_number(q['reward'])}{emoji})\n"
+            embed.add_field(name="Daily Quests", value=text, inline=False)
+        if self.quest_data.get('weekly'):
+            text = ""
+            for q in self.quest_data['weekly']:
+                text += f"{'✅' if q['claimed'] else '▫'} {q['desc'].format(target=q['target'])}: {q['progress']}/{q['target']} ({format_number(q['reward'])}{emoji})\n"
+            embed.add_field(name="Weekly Quests", value=text, inline=False)
+        return embed
+
+@bot.command(name="tasks", help="View your quest board")
+@economy_check()
+async def tasks_cmd(ctx):
+    data = await get_quests(ctx.author.id)
+    view = QuestView(ctx.author.id, data)
+    embed = view.build_embed()
+    await ctx.send(embed=embed, view=view)
+
+# ==================================================
+# BADGE SYSTEM
+# ==================================================
+BADGES = {
+    "first_1m": {"name":"First 1M", "emoji":"💵", "desc":"Reach 1,000,000 total coins"},
+    "bj_master": {"name":"Blackjack Master", "emoji":"🃏", "desc":"Win 50 blackjack games"},
+    "rob_king": {"name":"Robbery King", "emoji":"💰", "desc":"Rob 100 times"},
+    "daily_grinder": {"name":"Daily Grinder", "emoji":"☀️", "desc":"Complete 30 daily quests"},
+    "gambling_addict": {"name":"Gambling Addict", "emoji":"🎰", "desc":"Play 500 gambling games"},
+    "rich_player": {"name":"Rich Player", "emoji":"💎", "desc":"Reach 100,000,000 total coins"},
+}
+
+async def check_badges(user_id):
+    data = await get_user(user_id)
+    total = data['money'] + data['bank']
+    badges = json.loads(data.get('badges','[]'))
+    new_badges = []
+    if total >= 1_000_000 and "first_1m" not in badges:
+        badges.append("first_1m"); new_badges.append("first_1m")
+    if total >= 100_000_000 and "rich_player" not in badges:
+        badges.append("rich_player"); new_badges.append("rich_player")
+    if new_badges:
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("UPDATE users SET badges=? WHERE user_id=?", (json.dumps(badges), user_id))
+            await db.commit()
+        return new_badges
+    return []
+
+@bot.command(name="badges", help="View your badges")
+@economy_check()
+async def badges_cmd(ctx):
+    data = await get_user(ctx.author.id)
+    badges = json.loads(data.get('badges','[]'))
+    if not badges: return await ctx.send("You have no badges yet.")
+    embed = discord.Embed(title="🏅 Your Badges", color=0xf1c40f)
+    for badge_id in badges:
+        info = BADGES.get(badge_id)
+        if info:
+            embed.add_field(name=f"{info['emoji']} {info['name']}", value=info['desc'], inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name="badgesselect", aliases=["bs"], help="Select showcase badges")
+@economy_check()
+async def badge_select(ctx, badge1: str = None, badge2: str = None, badge3: str = None):
+    data = await get_user(ctx.author.id)
+    owned = set(json.loads(data.get('badges','[]')))
+    selected = []
+    for b in (badge1, badge2, badge3):
+        if b and b in owned:
+            selected.append(b)
+    if len(selected) > 3: return await ctx.send("Maximum 3 showcase badges.")
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("UPDATE users SET showcase_badges=? WHERE user_id=?", (json.dumps(selected), ctx.author.id))
+        await db.commit()
+    await ctx.send(f"Showcase badges set: {', '.join(selected)}" if selected else "Showcase cleared.")
+
+# ==================================================
 # ECONOMY COMMANDS (with all/half support)
 # ==================================================
 @bot.command(name="bal", aliases=["balance"], help="Check your or someone's balance - .bal [@user]")
@@ -679,194 +867,6 @@ async def loaninfo(ctx):
         await ctx.send(f"Loan: {format_number(data['loan_amount'])}{emoji}")
 
 # ==================================================
-# QUEST SYSTEM (Daily & Weekly)
-# ==================================================
-DAILY_QUEST_TEMPLATES = [
-    {"id":"gamble_win", "desc":"Win {target} gambling games", "target":3, "reward":25000, "type":"gamble_win"},
-    {"id":"rob", "desc":"Rob {target} people", "target":5, "reward":30000, "type":"rob"},
-    {"id":"earn", "desc":"Earn {target} coins", "target":25000, "reward":15000, "type":"earn"},
-    {"id":"work", "desc":"Use .work {target} times", "target":10, "reward":20000, "type":"work"},
-    {"id":"messages", "desc":"Send {target} messages", "target":50, "reward":10000, "type":"messages"},
-    {"id":"invite", "desc":"Invite {target} people", "target":3, "reward":250000, "type":"invite", "manual":True},
-]
-
-WEEKLY_QUEST_TEMPLATES = [
-    {"id":"big_gamble", "desc":"Win {target} gambling games", "target":30, "reward":200000, "type":"gamble_win"},
-    {"id":"big_earn", "desc":"Earn {target} coins", "target":200000, "reward":100000, "type":"earn"},
-    {"id":"big_invite", "desc":"Invite {target} people", "target":10, "reward":1000000, "type":"invite", "manual":True},
-]
-
-async def get_quests(user_id):
-    data = await get_user(user_id)
-    quest_data = json.loads(data.get('quest_data','{}'))
-    now = datetime.now(timezone.utc)
-    last_reset = data.get('quest_last_reset')
-    reset_daily = True
-    reset_weekly = True
-    if last_reset:
-        last_dt = datetime.fromisoformat(last_reset)
-        if (now - last_dt).total_seconds() < 86400:
-            reset_daily = False
-        if (now - last_dt).total_seconds() < 604800:
-            reset_weekly = False
-
-    if reset_daily:
-        quest_data['daily'] = []
-        for tmpl in DAILY_QUEST_TEMPLATES:
-            q = tmpl.copy()
-            q['progress'] = 0; q['claimed'] = False
-            quest_data['daily'].append(q)
-
-    if reset_weekly:
-        quest_data['weekly'] = []
-        for tmpl in WEEKLY_QUEST_TEMPLATES:
-            q = tmpl.copy()
-            q['progress'] = 0; q['claimed'] = False
-            quest_data['weekly'].append(q)
-
-    if not quest_data.get('daily'):
-        quest_data['daily'] = []
-        for tmpl in DAILY_QUEST_TEMPLATES:
-            q = tmpl.copy()
-            q['progress'] = 0; q['claimed'] = False
-            quest_data['daily'].append(q)
-    if not quest_data.get('weekly'):
-        quest_data['weekly'] = []
-        for tmpl in WEEKLY_QUEST_TEMPLATES:
-            q = tmpl.copy()
-            q['progress'] = 0; q['claimed'] = False
-            quest_data['weekly'].append(q)
-
-    quest_data['last_reset'] = now.isoformat()
-    async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET quest_data=?, quest_last_reset=? WHERE user_id=?",
-                         (json.dumps(quest_data), now.isoformat(), user_id))
-        await db.commit()
-    return quest_data
-
-async def update_quest_progress(user_id, quest_type, amount=1):
-    data = await get_quests(user_id)
-    changed = False
-    for category in ('daily','weekly'):
-        for q in data.get(category,[]):
-            if q['type'] == quest_type and not q['claimed']:
-                q['progress'] = min(q['progress'] + amount, q['target'])
-                changed = True
-    if changed:
-        async with aiosqlite.connect("hakari.db") as db:
-            await db.execute("UPDATE users SET quest_data=? WHERE user_id=?", (json.dumps(data), user_id))
-            await db.commit()
-
-class QuestView(discord.ui.View):
-    def __init__(self, user_id, quest_data):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.quest_data = quest_data
-
-    @discord.ui.button(label="Claim Rewards", style=discord.ButtonStyle.success)
-    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("Not your quests!", ephemeral=True)
-        total_reward = 0
-        for category in ('daily','weekly'):
-            for q in self.quest_data.get(category,[]):
-                if q['progress'] >= q['target'] and not q['claimed']:
-                    q['claimed'] = True
-                    total_reward += q['reward']
-        if total_reward == 0:
-            return await interaction.response.send_message("No completed quests to claim!", ephemeral=True)
-        await update_money(self.user_id, total_reward)
-        async with aiosqlite.connect("hakari.db") as db:
-            await db.execute("UPDATE users SET quest_data=? WHERE user_id=?", (json.dumps(self.quest_data), self.user_id))
-            await db.commit()
-        emoji = await get_setting(interaction.guild.id, "currency_emoji")
-        await interaction.response.send_message(f"✅ Claimed {format_number(total_reward)}{emoji} from quests!", ephemeral=True)
-        await self.update_display(interaction)
-
-    async def update_display(self, interaction):
-        embed = self.build_embed()
-        await interaction.edit_original_response(embed=embed, view=self)
-
-    def build_embed(self):
-        emoji = "💰"
-        embed = discord.Embed(title="📋 Quest Board", color=0x9b59b6)
-        if self.quest_data.get('daily'):
-            text = ""
-            for q in self.quest_data['daily']:
-                text += f"{'✅' if q['claimed'] else '▫'} {q['desc'].format(target=q['target'])}: {q['progress']}/{q['target']} ({format_number(q['reward'])}{emoji})\n"
-            embed.add_field(name="Daily Quests", value=text, inline=False)
-        if self.quest_data.get('weekly'):
-            text = ""
-            for q in self.quest_data['weekly']:
-                text += f"{'✅' if q['claimed'] else '▫'} {q['desc'].format(target=q['target'])}: {q['progress']}/{q['target']} ({format_number(q['reward'])}{emoji})\n"
-            embed.add_field(name="Weekly Quests", value=text, inline=False)
-        return embed
-
-@bot.command(name="tasks", help="View your quest board")
-@economy_check()
-async def tasks_cmd(ctx):
-    data = await get_quests(ctx.author.id)
-    view = QuestView(ctx.author.id, data)
-    embed = view.build_embed()
-    await ctx.send(embed=embed, view=view)
-
-# ==================================================
-# BADGE SYSTEM
-# ==================================================
-BADGES = {
-    "first_1m": {"name":"First 1M", "emoji":"💵", "desc":"Reach 1,000,000 total coins"},
-    "bj_master": {"name":"Blackjack Master", "emoji":"🃏", "desc":"Win 50 blackjack games"},
-    "rob_king": {"name":"Robbery King", "emoji":"💰", "desc":"Rob 100 times"},
-    "daily_grinder": {"name":"Daily Grinder", "emoji":"☀️", "desc":"Complete 30 daily quests"},
-    "gambling_addict": {"name":"Gambling Addict", "emoji":"🎰", "desc":"Play 500 gambling games"},
-    "rich_player": {"name":"Rich Player", "emoji":"💎", "desc":"Reach 100,000,000 total coins"},
-}
-
-async def check_badges(user_id):
-    data = await get_user(user_id)
-    total = data['money'] + data['bank']
-    badges = json.loads(data.get('badges','[]'))
-    new_badges = []
-    if total >= 1_000_000 and "first_1m" not in badges:
-        badges.append("first_1m"); new_badges.append("first_1m")
-    if total >= 100_000_000 and "rich_player" not in badges:
-        badges.append("rich_player"); new_badges.append("rich_player")
-    if new_badges:
-        async with aiosqlite.connect("hakari.db") as db:
-            await db.execute("UPDATE users SET badges=? WHERE user_id=?", (json.dumps(badges), user_id))
-            await db.commit()
-        return new_badges
-    return []
-
-@bot.command(name="badges", help="View your badges")
-@economy_check()
-async def badges_cmd(ctx):
-    data = await get_user(ctx.author.id)
-    badges = json.loads(data.get('badges','[]'))
-    if not badges: return await ctx.send("You have no badges yet.")
-    embed = discord.Embed(title="🏅 Your Badges", color=0xf1c40f)
-    for badge_id in badges:
-        info = BADGES.get(badge_id)
-        if info:
-            embed.add_field(name=f"{info['emoji']} {info['name']}", value=info['desc'], inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command(name="badgesselect", aliases=["bs"], help="Select showcase badges")
-@economy_check()
-async def badge_select(ctx, badge1: str = None, badge2: str = None, badge3: str = None):
-    data = await get_user(ctx.author.id)
-    owned = set(json.loads(data.get('badges','[]')))
-    selected = []
-    for b in (badge1, badge2, badge3):
-        if b and b in owned:
-            selected.append(b)
-    if len(selected) > 3: return await ctx.send("Maximum 3 showcase badges.")
-    async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("UPDATE users SET showcase_badges=? WHERE user_id=?", (json.dumps(selected), ctx.author.id))
-        await db.commit()
-    await ctx.send(f"Showcase badges set: {', '.join(selected)}" if selected else "Showcase cleared.")
-
-    # ==================================================
 # BANK HEIST SYSTEM (REWORKED - 2-10 players, 40% max)
 # ==================================================
 class HeistJoinView(discord.ui.View):
@@ -1196,7 +1196,9 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
-# Interactive Crash game (weighted)
+# ==================================================
+# CRASH GAME (BALANCED - PROPER WEIGHTED CHANCES)
+# ==================================================
 class CrashView(discord.ui.View):
     def __init__(self, ctx, bet, emoji):
         super().__init__(timeout=30)
@@ -1206,17 +1208,32 @@ class CrashView(discord.ui.View):
         self.crashed = False
         self.cashed_out = False
         self.multiplier = 1.0
-        roll = random.random()
-        if roll < 0.25: self.crash_point = round(random.uniform(1.01, 1.50), 2)
-        elif roll < 0.50: self.crash_point = round(random.uniform(1.50, 3.00), 2)
-        elif roll < 0.70: self.crash_point = round(random.uniform(3.00, 10.00), 2)
-        elif roll < 0.85: self.crash_point = round(random.uniform(10.00, 25.00), 2)
-        elif roll < 0.95: self.crash_point = round(random.uniform(25.00, 50.00), 2)
-        else: self.crash_point = round(random.uniform(50.00, 100.00), 2)
+        self.crash_point = self.generate_crash_point()
         self.start_time = datetime.now(timezone.utc)
         self.message = None
         self.update_task = None
         self._lock = asyncio.Lock()
+
+    def generate_crash_point(self):
+        """Generate a realistic crash point with proper probability distribution.
+        Lower multipliers are more common, higher multipliers are rare.
+        This prevents abuse by making high multipliers statistically unlikely."""
+        roll = random.random() * 100  # 0-100
+        
+        if roll < 30:  # 30% chance - crashes early (1.0x - 1.5x)
+            return round(random.uniform(1.01, 1.50), 2)
+        elif roll < 55:  # 25% chance - low (1.5x - 2.5x)
+            return round(random.uniform(1.51, 2.50), 2)
+        elif roll < 75:  # 20% chance - medium (2.5x - 5.0x)
+            return round(random.uniform(2.51, 5.00), 2)
+        elif roll < 88:  # 13% chance - high (5.0x - 15.0x)
+            return round(random.uniform(5.01, 15.00), 2)
+        elif roll < 96:  # 8% chance - very high (15.0x - 50.0x)
+            return round(random.uniform(15.01, 50.00), 2)
+        elif roll < 99:  # 3% chance - extreme (50.0x - 200.0x)
+            return round(random.uniform(50.01, 200.00), 2)
+        else:  # 1% chance - insane (200.0x - 1000.0x)
+            return round(random.uniform(200.01, 1000.00), 2)
 
     async def start_update_task(self):
         self.update_task = asyncio.create_task(self.auto_update())
@@ -1225,47 +1242,63 @@ class CrashView(discord.ui.View):
         try:
             while not self.crashed and not self.cashed_out:
                 elapsed = (datetime.now(timezone.utc) - self.start_time).total_seconds()
-                self.multiplier = round(1.0 + elapsed * 0.15, 2)
+                # Exponential growth: slower at first, faster later
+                self.multiplier = round(1.0 * (1.08 ** elapsed), 2)
+                
                 if self.multiplier >= self.crash_point:
                     self.crashed = True
                     await self.crash()
                     return
+                
                 embed = discord.Embed(title="📈 Crash", color=0x2ecc71)
                 embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
                 embed.add_field(name="Multiplier", value=f"{self.multiplier}x", inline=True)
                 embed.add_field(name="Potential Win", value=f"{format_number(int(self.bet * self.multiplier))} {self.emoji}", inline=True)
                 embed.set_footer(text="Click 'Cash Out' to secure your winnings!")
-                if self.message: await self.message.edit(embed=embed, view=self)
-                await asyncio.sleep(0.5)
-        except (discord.NotFound, asyncio.CancelledError): pass
+                
+                if self.message: 
+                    await self.message.edit(embed=embed, view=self)
+                await asyncio.sleep(0.6)  # Slightly slower updates to reduce spam
+        except (discord.NotFound, asyncio.CancelledError): 
+            pass
 
     async def crash(self):
         async with self._lock:
             embed = discord.Embed(title="💥 CRASHED!", color=0xe74c3c)
             embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
-            embed.add_field(name="Crashed at", value=f"{self.crash_point}x", inline=True)
+            embed.add_field(name="Crashed at", value=f"{self.multiplier}x", inline=True)
             embed.add_field(name="Lost", value=f"{format_number(self.bet)} {self.emoji}", inline=False)
-            for child in self.children: child.disabled = True
+            for child in self.children: 
+                child.disabled = True
             try:
-                if self.message: await self.message.edit(embed=embed, view=None)
-            except discord.NotFound: pass
+                if self.message: 
+                    await self.message.edit(embed=embed, view=None)
+            except discord.NotFound: 
+                pass
             self.stop()
             await set_gambling_cooldown(self.ctx.author.id)
 
     @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.success)
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
         async with self._lock:
-            if interaction.user.id != self.ctx.author.id: return await interaction.response.send_message("This is not your game!", ephemeral=True)
-            if self.cashed_out or self.crashed: return
+            if interaction.user.id != self.ctx.author.id: 
+                return await interaction.response.send_message("This is not your game!", ephemeral=True)
+            if self.cashed_out or self.crashed: 
+                return
+            
             self.cashed_out = True
-            if self.update_task and not self.update_task.done(): self.update_task.cancel()
+            if self.update_task and not self.update_task.done(): 
+                self.update_task.cancel()
+            
             win_amount = int(self.bet * self.multiplier)
             await update_money(self.ctx.author.id, win_amount)
+            
             embed = discord.Embed(title="✅ Cashed Out!", color=0x2ecc71)
             embed.add_field(name="Bet", value=f"{format_number(self.bet)} {self.emoji}", inline=True)
             embed.add_field(name="Multiplier", value=f"{self.multiplier}x", inline=True)
             embed.add_field(name="Won", value=f"{format_number(win_amount)} {self.emoji}", inline=False)
-            for child in self.children: child.disabled = True
+            for child in self.children: 
+                child.disabled = True
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
             await set_gambling_cooldown(self.ctx.author.id)
@@ -1275,10 +1308,11 @@ class CrashView(discord.ui.View):
         async with self._lock:
             if not self.crashed and not self.cashed_out:
                 self.crashed = True
-                if self.update_task and not self.update_task.done(): self.update_task.cancel()
+                if self.update_task and not self.update_task.done(): 
+                    self.update_task.cancel()
                 await self.crash()
 
-@bot.command(name="crash", help="Crash game - .crash all/half/1k")
+@bot.command(name="crash", help="Crash game - .crash all/half/1k (balanced odds)")
 @economy_check()
 @gambling_cooldown_check()
 async def crash(ctx, amount_str: str):
@@ -1291,7 +1325,7 @@ async def crash(ctx, amount_str: str):
     embed.add_field(name="Bet", value=f"{format_number(amount)} {emoji}", inline=True)
     embed.add_field(name="Multiplier", value="1.0x", inline=True)
     embed.add_field(name="Potential Win", value=f"{format_number(int(amount))} {emoji}", inline=True)
-    embed.set_footer(text="Click 'Cash Out' to secure your winnings!")
+    embed.set_footer(text="Click 'Cash Out' to secure your winnings!\nLow multipliers are common, high multipliers are rare")
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
     await view.start_update_task()
@@ -2553,7 +2587,7 @@ async def help_cmd(ctx):
     pages = [
         discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="Commands", value=f"`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)\n`.rob @user` - Rob someone (1h)\n`.pay @user all/half/1k` - Pay someone\n`.interest` - View bank rate\n`.security <hours>` - Buy protection", inline=False),
         discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="Commands", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details", inline=False),
-        discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack\n`.crash all/half/1k` - Crash game\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.roulette all/half/1k <bet>` - Roulette\n`.highlow all/half/1k h/l` - High/Low\n`.dice all/half/1k 1-6` - Dice (5x)\n`.horserace all/half/1k A/B/C/D` - Horse race\n`.rps all/half/1k` - Rock Paper Scissors\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries, 5min)", inline=False),
+        discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack\n`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.roulette all/half/1k <bet>` - Roulette\n`.highlow all/half/1k h/l` - High/Low\n`.dice all/half/1k 1-6` - Dice (5x)\n`.horserace all/half/1k A/B/C/D` - Horse race\n`.rps all/half/1k` - Rock Paper Scissors\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries, 5min)", inline=False),
         discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="Commands", value="`.bankheist` - Start bank heist\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
         discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="Commands", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
         discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="Commands", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop\n`.gm` - Global market\n`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
