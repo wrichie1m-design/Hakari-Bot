@@ -233,7 +233,7 @@ async def lottery_draw():
                     except:
                         pass
                 await db.execute("UPDATE guild_settings SET lottery_jackpot = '0', lottery_tickets_sold = 0 WHERE guild_id = ?", (guild_id,))
-                await db.execute("UPDATE users SET lottery_tickets = 0 WHERE user_id = ?", (winner_id,))
+                await db.execute("UPDATE users SET lottery_tickets = 0")
         await db.commit()
 @lottery_draw.before_loop
 async def before_lottery(): await bot.wait_until_ready()
@@ -257,6 +257,7 @@ async def get_user(uid):
             data['invite_rejoins'] = int(data.get('invite_rejoins',0))
             data['gambling_won'] = int(data.get('gambling_won',0))
             data['gambling_lost'] = int(data.get('gambling_lost',0))
+            data['lottery_tickets'] = int(data.get('lottery_tickets',0))
             return data
         await db.execute("INSERT INTO users (user_id) VALUES (?)", (uid,))
         await db.commit()
@@ -273,6 +274,7 @@ async def get_user(uid):
             data2['invite_rejoins'] = int(data2.get('invite_rejoins',0))
             data2['gambling_won'] = int(data2.get('gambling_won',0))
             data2['gambling_lost'] = int(data2.get('gambling_lost',0))
+            data2['lottery_tickets'] = int(data2.get('lottery_tickets',0))
             return data2
 
 async def update_money(uid, amount):
@@ -1952,7 +1954,7 @@ class HeistJoinView(discord.ui.View):
         self.leader_id = leader_id
         self.members = [leader_id]
         self.message = None
-    @discord.ui.button(label="Join & Accept", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Join & Accept", style=discord.ButtonStyle.success)
     async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id in self.members:
             return await interaction.response.send_message("Already in heist!", ephemeral=True)
@@ -1964,39 +1966,68 @@ class HeistJoinView(discord.ui.View):
         embed.set_field_at(0, name=f"Members ({len(self.members)}/10)", value=members_str)
         await self.message.edit(embed=embed)
         await interaction.response.send_message("You're in!", ephemeral=True)
+    @discord.ui.button(label="❌ Leave", style=discord.ButtonStyle.danger)
+    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.members:
+            return await interaction.response.send_message("You're not in this heist!", ephemeral=True)
+        if interaction.user.id == self.leader_id:
+            return await interaction.response.send_message("Leader cannot leave! Use Cancel instead.", ephemeral=True)
+        self.members.remove(interaction.user.id)
+        embed = self.message.embeds[0]
+        members_str = "\n".join(f"✅ <@{uid}>" for uid in self.members)
+        embed.set_field_at(0, name=f"Members ({len(self.members)}/10)", value=members_str)
+        await self.message.edit(embed=embed)
+        await interaction.response.send_message("You've left the heist.", ephemeral=True)
+    @discord.ui.button(label="🚫 Cancel Heist", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.leader_id:
+            return await interaction.response.send_message("Only the leader can cancel!", ephemeral=True)
+        embed = discord.Embed(title="🚫 Heist Cancelled", description=f"Heist cancelled by <@{self.leader_id}>.", color=0xe74c3c)
+        await self.message.edit(embed=embed, view=None)
+        self.stop()
+    @discord.ui.button(label="⚡ Force Start (Leader)", style=discord.ButtonStyle.primary)
+    async def force_start_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.leader_id:
+            return await interaction.response.send_message("Only the leader can force start!", ephemeral=True)
+        if len(self.members) < 2:
+            return await interaction.response.send_message("Need at least 2 members to start!", ephemeral=True)
+        await self.start_heist()
+        self.stop()
+    async def start_heist(self):
+        member_count = len(self.members)
+        success_chance = min(0.20 + (member_count * 0.02), 0.40)
+        success = random.random() < success_chance
+        if success:
+            reward_per_member = 100000 // member_count
+            for uid in self.members:
+                await update_money(uid, reward_per_member)
+            embed = discord.Embed(title="🏦 Bank Heist Successful!",
+                                  description=f"Split 100k between {member_count} members!\nEach got {format_number(reward_per_member)}💰",
+                                  color=0x2ecc71)
+        else:
+            fine_per_member = 50000 // member_count
+            for uid in self.members:
+                await update_money(uid, -fine_per_member)
+            embed = discord.Embed(title="🚔 Bank Heist Failed!",
+                                  description=f"Police caught you!\nEach member lost {format_number(fine_per_member)}💰",
+                                  color=0xe74c3c)
+        async with aiosqlite.connect("hakari.db") as db:
+            for uid in self.members:
+                await db.execute("UPDATE users SET last_heist=? WHERE user_id=?",
+                               (datetime.now(timezone.utc).isoformat(), uid))
+            await db.commit()
+        await self.message.channel.send(embed=embed)
+        await self.message.delete()
     async def on_timeout(self):
         try:
             if len(self.members) < 2:
                 await self.message.edit(content="❌ Heist cancelled - need at least 2 members!", view=None)
                 return
-            member_count = len(self.members)
-            success_chance = min(0.20 + (member_count * 0.02), 0.40)
-            success = random.random() < success_chance
-            if success:
-                reward_per_member = 100000 // member_count
-                for uid in self.members:
-                    await update_money(uid, reward_per_member)
-                embed = discord.Embed(title="🏦 Bank Heist Successful!",
-                                      description=f"Split 100k between {member_count} members!\nEach got {format_number(reward_per_member)}💰",
-                                      color=0x2ecc71)
-            else:
-                fine_per_member = 50000 // member_count
-                for uid in self.members:
-                    await update_money(uid, -fine_per_member)
-                embed = discord.Embed(title="🚔 Bank Heist Failed!",
-                                      description=f"Police caught you!\nEach member lost {format_number(fine_per_member)}💰",
-                                      color=0xe74c3c)
-            async with aiosqlite.connect("hakari.db") as db:
-                for uid in self.members:
-                    await db.execute("UPDATE users SET last_heist=? WHERE user_id=?",
-                                   (datetime.now(timezone.utc).isoformat(), uid))
-                await db.commit()
-            await self.message.channel.send(embed=embed)
-            await self.message.delete()
+            await self.start_heist()
         except (discord.NotFound, discord.HTTPException):
             pass
 
-@bot.command(name="bankheist")
+@bot.command(name="bankheist", aliases=["heist"])
 @economy_check()
 async def bank_heist(ctx):
     data = await get_user(ctx.author.id)
@@ -2009,6 +2040,7 @@ async def bank_heist(ctx):
     embed = discord.Embed(title="🏦 Bank Heist Forming", color=0x2ecc71)
     embed.add_field(name=f"Members (1/10)", value=f"✅ {ctx.author.mention}")
     embed.add_field(name="Status", value="Need at least 2 members to start.\n3 minute timer.", inline=False)
+    embed.add_field(name="Buttons", value="✅ Join - Join the heist\n❌ Leave - Leave the heist\n🚫 Cancel - Leader cancels heist\n⚡ Force Start - Leader starts early", inline=False)
     embed.set_footer(text="Click 'Join & Accept' to participate!")
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
@@ -2016,20 +2048,32 @@ async def bank_heist(ctx):
 # ==================================================
 # LOTTERY SYSTEM
 # ==================================================
-@bot.command(name="lottery")
+@bot.command(name="lottery", aliases=["lotto"])
 @economy_check()
 async def lottery(ctx):
     jackpot = int(await get_setting(ctx.guild.id, "lottery_jackpot"))
     tickets_sold = await get_setting(ctx.guild.id, "lottery_tickets_sold")
+    data = await get_user(ctx.author.id)
+    user_tickets = data.get('lottery_tickets', 0)
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    
     embed = discord.Embed(title="🎟️ Weekly Lottery", color=0xf1c40f)
-    embed.add_field(name="Current Jackpot", value=f"{format_number(jackpot)}{emoji}", inline=True)
-    embed.add_field(name="Tickets Sold", value=tickets_sold, inline=True)
-    embed.add_field(name="Ticket Price", value=f"50,000{emoji} each", inline=False)
-    embed.add_field(name="How to Play", value="`.buyticket <amount>` to purchase tickets. Drawing every Sunday!\nMore tickets = higher chance to win.\nWinner takes the entire jackpot!", inline=False)
+    embed.add_field(name="💰 Current Jackpot", value=f"{format_number(jackpot)}{emoji}", inline=True)
+    embed.add_field(name="🎫 Tickets Sold", value=str(tickets_sold), inline=True)
+    embed.add_field(name="🎟️ Your Tickets", value=str(user_tickets), inline=True)
+    embed.add_field(name="💵 Ticket Price", value=f"50,000{emoji} each", inline=False)
+    embed.add_field(name="📋 How to Play", 
+                    value="`.buyticket <amount>` - Purchase tickets\n"
+                          "`.lottery` - View lottery info\n"
+                          "`.mytickets` - Check your tickets\n\n"
+                          "• More tickets = higher chance to win\n"
+                          "• Drawing every Sunday\n"
+                          "• Winner takes the entire jackpot!\n"
+                          "• 50% of ticket sales go to jackpot", inline=False)
+    embed.set_footer(text="Next draw: Sunday | Use .buyticket to enter!")
     await ctx.send(embed=embed)
 
-@bot.command(name="buyticket")
+@bot.command(name="buyticket", aliases=["bt"])
 @economy_check()
 async def buy_ticket(ctx, amount: int = 1):
     if amount <= 0: return await ctx.send("Must buy at least 1 ticket.")
@@ -2044,6 +2088,69 @@ async def buy_ticket(ctx, amount: int = 1):
         await db.commit()
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"✅ Purchased {amount} lottery ticket(s) for {format_number(cost)}{emoji}!")
+
+@bot.command(name="mytickets", aliases=["mt"])
+@economy_check()
+async def my_tickets(ctx):
+    data = await get_user(ctx.author.id)
+    tickets = data.get('lottery_tickets', 0)
+    jackpot = int(await get_setting(ctx.guild.id, "lottery_jackpot"))
+    total_sold = await get_setting(ctx.guild.id, "lottery_tickets_sold")
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    
+    if tickets <= 0:
+        return await ctx.send(f"You don't have any lottery tickets! Buy some with `.buyticket <amount>`")
+    
+    chance = (tickets / total_sold * 100) if total_sold > 0 else 0
+    
+    embed = discord.Embed(title="🎟️ Your Lottery Tickets", color=0xf1c40f)
+    embed.add_field(name="Your Tickets", value=str(tickets), inline=True)
+    embed.add_field(name="Total Sold", value=str(total_sold), inline=True)
+    embed.add_field(name="Win Chance", value=f"{chance:.2f}%", inline=True)
+    embed.add_field(name="Current Jackpot", value=f"{format_number(jackpot)}{emoji}", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name="setlotteryjackpot", aliases=["slj"])
+@owner_only()
+async def set_lottery_jackpot(ctx, amount_str: str):
+    try: amount = parse_amount(amount_str)
+    except: return await ctx.send("Invalid amount.")
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("INSERT OR REPLACE INTO guild_settings (guild_id, lottery_jackpot) VALUES (?,?)", 
+                         (ctx.guild.id, str(amount)))
+        await db.commit()
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    await ctx.send(f"Lottery jackpot set to {format_number(amount)}{emoji}.")
+
+@bot.command(name="forcedraw", aliases=["fdraw"])
+@owner_only()
+async def force_draw(ctx):
+    guild_id = ctx.guild.id
+    async with aiosqlite.connect("hakari.db") as db:
+        jackpot_str = await get_setting(guild_id, "lottery_jackpot")
+        jackpot = int(jackpot_str) if jackpot_str else 0
+        tickets_sold = await get_setting(guild_id, "lottery_tickets_sold")
+        if jackpot <= 0 or tickets_sold <= 0:
+            return await ctx.send("No active lottery to draw!")
+        async with db.execute("SELECT user_id, lottery_tickets FROM users WHERE lottery_tickets > 0") as cur:
+            rows = await cur.fetchall()
+        total_tickets = sum(r[1] for r in rows)
+        if total_tickets == 0:
+            return await ctx.send("No tickets were sold!")
+        ticket_winner = random.randint(1, total_tickets)
+        winner_id = None
+        for uid, tickets in rows:
+            ticket_winner -= tickets
+            if ticket_winner <= 0:
+                winner_id = uid
+                break
+        if winner_id:
+            await update_money(winner_id, jackpot)
+            emoji = await get_setting(guild_id, "currency_emoji")
+            await ctx.send(f"🎰 Force draw complete! <@{winner_id}> won {format_number(jackpot)}{emoji}!")
+            await db.execute("UPDATE guild_settings SET lottery_jackpot = '0', lottery_tickets_sold = 0 WHERE guild_id = ?", (guild_id,))
+            await db.execute("UPDATE users SET lottery_tickets = 0")
+            await db.commit()
 
 # ==================================================
 # SHOP & BUSINESS COMMANDS
@@ -2661,8 +2768,8 @@ async def price_pool(ctx):
 async def claim(ctx):
     embed = discord.Embed(title="📨 How to Claim Your Invite Reward", color=0x9b59b6)
     embed.description = (
-        "Make sure you invited people to the server.\n"
-        "If you did, create a ticket in the designated channel.\n"
+        "Make sure you invited people to **https://discord.gg/9QsSqQ3aRM**\n"
+        "If you did, create a ticket in <#1503152520686731434>\n\n"
         "The owners will verify your invites and add them manually."
     )
     embed.set_footer(text="Invites are verified by server staff.")
@@ -2749,12 +2856,12 @@ async def cmds_command(ctx):
             discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="💳 Loans", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details\n\n• 10% interest per hour\n• Max loan: 50,000 coins", inline=False),
             discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="🎲 Classic Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.dice all/half/1k 1-6` - Dice (5x)\n`.rps all/half/1k` - Rock Paper Scissors\n`.highlow all/half/1k h/l` - High/Low (1.1x)", inline=False).add_field(name="🎰 Casino Games", value="`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack (2.5x)\n`.roulette all/half/1k <bet>` - Roulette\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)", inline=False).add_field(name="🎮 Mini Games", value="`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries)\n`.horserace all/half/1k A/B/C/D` - Horse race", inline=False),
             discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="🏦 Heist", value="`.bankheist` - Start bank heist\n\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
-            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
+            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n`.mytickets` - Check your tickets\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
             discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="🏪 Shop", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View your shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop open/closed\n`.gm` - Global market", inline=False).add_field(name="🏢 Business", value="`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade business\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
             discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="💕 Relationships", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests\n`.topcouples` - Top couples", inline=False),
-            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats\n`.ci [uses] [age]` - Create invite link\n`.glinv` - Invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• ✅ Joins\n• ❌ Left\n• ⚠️ Fake accounts\n• 🔄 Rejoins\n\nProfile picture included!", inline=False),
+            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (with PFP)\n`.ci [uses] [age]` - Create invite link\n`.glinv` - Invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• ✅ Joins\n• ❌ Left\n• ⚠️ Fake accounts\n• 🔄 Rejoins\n\nProfile picture included!", inline=False),
             discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n\n• Earn XP by chatting\n• Level up every 100 XP per level²\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges\n\nComplete quests for bonus coins!", inline=False),
-            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats", inline=False),
+            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
@@ -2771,8 +2878,8 @@ async def ccmds_command(ctx):
         pages = [
             discord.Embed(title="👑 Owner Commands - Money", color=0xe74c3c).add_field(name="💰 Money Management", value="`.addmoney @user <amount>` - Add money to user\n`.removemoney @user all/half/amount` - Remove money\n`.setmoney @user <amount>` - Set wallet balance\n`.addbank @user <amount>` - Add to bank\n`.removebank @user all/half/amount` - Remove from bank", inline=False).add_field(name="🔧 Utilities", value="`.avt @user` - Toggle tax exemption\n`.protect @user` - Protect from robs\n`.unprotect @user` - Remove protection\n`.sst @user` - Reset rob cooldown", inline=False),
             discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
-            discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward", inline=False),
-            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="📊 Invite Management", value="`.addinvites @user <amount>` - Add invites manually\n`.setinvitereward <invites> <amount>` - Set reward\n`.glinv` - View invite leaderboard", inline=False),
+            discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward\n`.setlotteryjackpot <amount>` - Set lottery jackpot", inline=False),
+            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="🎟️ Lottery Management", value="`.forcedraw` - Force lottery draw\n`.setlotteryjackpot <amount>` - Set jackpot\n`.addinvites @user <amount>` - Add invites", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
