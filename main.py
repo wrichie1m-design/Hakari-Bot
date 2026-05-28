@@ -112,7 +112,8 @@ async def init_db():
             quest_data TEXT DEFAULT '{}', quest_last_reset TIMESTAMP,
             badges TEXT DEFAULT '[]', showcase_badges TEXT DEFAULT '[]',
             last_heist TIMESTAMP, lottery_tickets INTEGER DEFAULT 0, lottery_last_tickets TIMESTAMP,
-            gambling_won INTEGER DEFAULT 0, gambling_lost INTEGER DEFAULT 0
+            gambling_won INTEGER DEFAULT 0, gambling_lost INTEGER DEFAULT 0,
+            last_message TIMESTAMP
         )''')
         for col in ["security_until TIMESTAMP", "invite_count INTEGER DEFAULT 0",
                      "invite_joins INTEGER DEFAULT 0", "invite_left INTEGER DEFAULT 0",
@@ -120,7 +121,8 @@ async def init_db():
                      "quest_data TEXT DEFAULT '{}'", "quest_last_reset TIMESTAMP",
                      "badges TEXT DEFAULT '[]'", "showcase_badges TEXT DEFAULT '[]'",
                      "last_heist TIMESTAMP", "lottery_tickets INTEGER DEFAULT 0", "lottery_last_tickets TIMESTAMP",
-                     "gambling_won INTEGER DEFAULT 0", "gambling_lost INTEGER DEFAULT 0"]:
+                     "gambling_won INTEGER DEFAULT 0", "gambling_lost INTEGER DEFAULT 0",
+                     "last_message TIMESTAMP"]:
             try:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col}")
             except:
@@ -2877,7 +2879,7 @@ async def ccmds_command(ctx):
     try:
         pages = [
             discord.Embed(title="👑 Owner Commands - Money", color=0xe74c3c).add_field(name="💰 Money Management", value="`.addmoney @user <amount>` - Add money to user\n`.removemoney @user all/half/amount` - Remove money\n`.setmoney @user <amount>` - Set wallet balance\n`.addbank @user <amount>` - Add to bank\n`.removebank @user all/half/amount` - Remove from bank", inline=False).add_field(name="🔧 Utilities", value="`.avt @user` - Toggle tax exemption\n`.protect @user` - Protect from robs\n`.unprotect @user` - Remove protection\n`.sst @user` - Reset rob cooldown", inline=False),
-            discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
+            discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.rewardlasteveryone <amount> [count]` - Reward all servers\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
             discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward\n`.setlotteryjackpot <amount>` - Set lottery jackpot", inline=False),
             discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="🎟️ Lottery Management", value="`.forcedraw` - Force lottery draw\n`.setlotteryjackpot <amount>` - Set jackpot\n`.addinvites @user <amount>` - Add invites", inline=False),
         ]
@@ -2965,6 +2967,40 @@ class PageModal(discord.ui.Modal):
             self.paginator.current = page_num - 1
             self.paginator.update_buttons()
             await interaction.response.edit_message(embed=self.paginator.pages[self.paginator.current], view=self.paginator)
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
+
+class ServerPageModal(discord.ui.Modal):
+    def __init__(self, view, total_pages, build_embed, ctx):
+        super().__init__(title="Jump to Page", timeout=60)
+        self.view = view
+        self.total_pages = total_pages
+        self.build_embed = build_embed
+        self.ctx = ctx
+        self.page_input = discord.ui.TextInput(
+            label=f"Page number (1-{total_pages})",
+            placeholder="e.g. 2",
+            min_length=1,
+            max_length=2,
+            required=True
+        )
+        self.add_item(self.page_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("Not your menu!", ephemeral=True)
+        try:
+            page_num = int(self.page_input.value)
+            if page_num < 1 or page_num > self.total_pages:
+                return await interaction.response.send_message(
+                    f"❌ Please enter a number between 1 and {self.total_pages}.", 
+                    ephemeral=True
+                )
+            self.view.current_page = page_num
+            await interaction.response.edit_message(
+                embed=await self.build_embed(page_num), 
+                view=self.view
+            )
         except ValueError:
             await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
 
@@ -3102,6 +3138,87 @@ async def reward_last(ctx, amount_str: str, count: int = 1):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     mentions = ', '.join(f"<@{uid}>" for uid in rewarded)
     await ctx.send(f"Added {format_number(amt)}{emoji} to the last {len(rewarded)} message authors: {mentions}")
+
+@bot.command(name="rewardlasteveryone", aliases=["rle"])
+@main_owner_only()
+async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
+    """Reward the last message authors across ALL servers (must have messaged within 5 minutes)"""
+    try:
+        amt = parse_amount(amount_str)
+    except:
+        return await ctx.send("Invalid amount.")
+    
+    if amt <= 0:
+        return await ctx.send("Amount must be positive.")
+    
+    # Collect all recent authors from all servers
+    all_recent = {}
+    now = datetime.now(timezone.utc)
+    
+    # Also check database for users who messaged within last 5 minutes
+    cutoff_time = now - timedelta(minutes=5)
+    
+    async with aiosqlite.connect("hakari.db") as db:
+        # Get all users who have messaged within the last 5 minutes across all servers
+        async with db.execute(
+            "SELECT user_id FROM users WHERE last_message IS NOT NULL AND last_message > ?",
+            (cutoff_time.isoformat(),)
+        ) as cur:
+            rows = await cur.fetchall()
+        
+        # Also check the recent_message_authors cache
+        for guild_id, dq in recent_message_authors.items():
+            for uid in dq:
+                all_recent[uid] = now  # These are definitely recent
+    
+    # Combine: only reward users who are in the database AND have messaged recently
+    eligible_users = []
+    seen = set()
+    
+    # First priority: users from the database who messaged recently
+    for (uid,) in rows:
+        if uid not in seen:
+            eligible_users.append(uid)
+            seen.add(uid)
+    
+    # Second priority: users from the cache
+    for uid in all_recent:
+        if uid not in seen:
+            eligible_users.append(uid)
+            seen.add(uid)
+    
+    # Take only the requested count
+    eligible_users = eligible_users[:count]
+    
+    if not eligible_users:
+        return await ctx.send("❌ No eligible users found! Users must have sent a message within the last 5 minutes on any server.")
+    
+    # Reward them
+    rewarded_count = 0
+    async with aiosqlite.connect("hakari.db") as db:
+        for uid in eligible_users:
+            try:
+                async with db.execute("SELECT money FROM users WHERE user_id=?", (uid,)) as cur:
+                    row = await cur.fetchone()
+                cur_money = int(row[0]) if row else 0
+                await db.execute("UPDATE users SET money = ? WHERE user_id = ?", (str(cur_money + amt), uid))
+                rewarded_count += 1
+            except:
+                pass
+        await db.commit()
+    
+    emoji = "💰"
+    mentions = ', '.join(f"<@{uid}>" for uid in eligible_users[:5])
+    if len(eligible_users) > 5:
+        mentions += f" and {len(eligible_users) - 5} more..."
+    
+    embed = discord.Embed(title="🌍 Global Reward", color=0x2ecc71)
+    embed.description = f"Rewarded **{rewarded_count}** recent chatters across all servers with **{format_number(amt)}{emoji}** each!"
+    embed.add_field(name="Recipients", value=mentions, inline=False)
+    embed.set_footer(text=f"Only users active within last 5 minutes were eligible")
+    
+    await ctx.send(embed=embed)
+    await log_action(ctx.author.id, "RewardLastEveryone", f"Rewarded {rewarded_count} users with {amt} each across all servers")
 
 async def resolve_user_id(target: str) -> int:
     if target.startswith('<@') and target.endswith('>'):
@@ -3241,31 +3358,200 @@ async def logs(ctx, limit: int = 10):
 @bot.command(name="ann")
 @main_owner_only()
 async def announce(ctx, *, message: str):
+    """Announce to all servers - sends to the most active channel"""
     sent = 0
     for guild in bot.guilds:
         try:
-            channel = guild.system_channel or guild.text_channels[0]
-            embed = discord.Embed(description=message, color=0xf1c40f)
-            embed.set_author(name=f"{ctx.author.name} - Owner Of Bot", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
-            await channel.send(embed=embed)
-            sent += 1
-        except: pass
-    await ctx.send(f"📢 Announcement sent to {sent}/{len(bot.guilds)} servers.")
+            # Find the most active text channel
+            best_channel = None
+            highest_messages = 0
+            
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    try:
+                        # Try to get recent message count as activity indicator
+                        msg_count = 0
+                        async for _ in channel.history(limit=50):
+                            msg_count += 1
+                        if msg_count > highest_messages:
+                            highest_messages = msg_count
+                            best_channel = channel
+                    except:
+                        # Fallback to system channel or first available
+                        pass
+            
+            if not best_channel:
+                best_channel = guild.system_channel or guild.text_channels[0]
+            
+            if best_channel and best_channel.permissions_for(guild.me).send_messages:
+                embed = discord.Embed(description=message, color=0xf1c40f)
+                embed.set_author(name=f"{ctx.author.name} - Owner Of Bot", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
+                embed.set_footer(text=f"📢 Official Announcement • {datetime.now(timezone.utc).strftime('%b %d, %Y')}")
+                await best_channel.send(embed=embed)
+                sent += 1
+        except:
+            pass
+    
+    embed = discord.Embed(title="📢 Announcement Sent", color=0x2ecc71)
+    embed.description = f"Message sent to **{sent}/{len(bot.guilds)}** servers"
+    embed.add_field(name="Content", value=message[:1024] if len(message) > 1024 else message, inline=False)
+    embed.set_footer(text="Sent to the most active channel in each server")
+    await ctx.send(embed=embed)
 
 @bot.command(name="servers")
 @main_owner_only()
 async def servers_list(ctx):
-    embed = discord.Embed(title="🌐 Bot Servers", color=0x3498db)
-    total_members = 0
-    desc = ""
-    for i, guild in enumerate(bot.guilds[:25], 1):
-        desc += f"**{i}. {guild.name}** - {guild.member_count} members\n"
-        total_members += guild.member_count
-    if len(bot.guilds) > 25:
-        desc += f"\n... and {len(bot.guilds)-25} more servers"
-    embed.description = desc
-    embed.set_footer(text=f"Total: {len(bot.guilds)} servers | {total_members} members")
-    await ctx.send(embed=embed)
+    """Show all servers the bot is in, sorted by member count"""
+    try:
+        guilds_info = []
+        for guild in bot.guilds:
+            bot_count = sum(1 for m in guild.members if m.bot)
+            human_count = guild.member_count - bot_count
+            owner = guild.owner
+            owner_name = str(owner) if owner else "Unknown"
+            boost_level = guild.premium_tier
+            boost_count = guild.premium_subscription_count
+            text_channels = len(guild.text_channels)
+            voice_channels = len(guild.voice_channels)
+            created_at = guild.created_at.strftime("%b %d, %Y")
+            
+            guilds_info.append({
+                'guild': guild,
+                'name': guild.name,
+                'id': guild.id,
+                'members': guild.member_count,
+                'humans': human_count,
+                'bots': bot_count,
+                'owner': owner_name,
+                'owner_id': guild.owner_id,
+                'boost_level': boost_level,
+                'boost_count': boost_count,
+                'text_channels': text_channels,
+                'voice_channels': voice_channels,
+                'total_channels': text_channels + voice_channels,
+                'created_at': created_at,
+                'icon_url': guild.icon.url if guild.icon else None,
+                'description': guild.description or "No description",
+                'features': guild.features,
+                'vanity': guild.vanity_url_code,
+            })
+        
+        guilds_info.sort(key=lambda x: x['members'], reverse=True)
+        
+        total_members = sum(g['members'] for g in guilds_info)
+        total_humans = sum(g['humans'] for g in guilds_info)
+        total_bots = sum(g['bots'] for g in guilds_info)
+        
+        per_page = 5
+        total_pages = max(1, (len(guilds_info) + per_page - 1) // per_page)
+        current_page = 1
+        
+        async def build_embed(page):
+            start = (page - 1) * per_page
+            end = start + per_page
+            page_guilds = guilds_info[start:end]
+            
+            embed = discord.Embed(
+                title=f"🌐 Bot Servers ({len(bot.guilds)} total)",
+                color=0x3498db
+            )
+            
+            embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else bot.user.default_avatar.url)
+            
+            desc = ""
+            for i, ginfo in enumerate(page_guilds, start + 1):
+                boost_emoji = {0: "⚪", 1: "🌱", 2: "🔮", 3: "👑"}.get(ginfo['boost_level'], "⚪")
+                verified = "✅" if "VERIFIED" in ginfo['features'] else ""
+                partnered = "🤝" if "PARTNERED" in ginfo['features'] else ""
+                
+                desc += f"**{i}.** `{ginfo['name']}`\n"
+                desc += f"👑 Owner: `{ginfo['owner']}`\n"
+                desc += f"👥 Members: **{ginfo['members']}** (👤 {ginfo['humans']} | 🤖 {ginfo['bots']})\n"
+                desc += f"📺 Channels: {ginfo['total_channels']} (💬 {ginfo['text_channels']} | 🔊 {ginfo['voice_channels']})\n"
+                desc += f"{boost_emoji} Boost: Level {ginfo['boost_level']} ({ginfo['boost_count']} boosts) {verified}{partnered}\n"
+                desc += f"📅 Created: {ginfo['created_at']}\n"
+                desc += f"🆔 ID: `{ginfo['id']}`\n"
+                if ginfo['vanity']:
+                    desc += f"🔗 Vanity: `{ginfo['vanity']}`\n"
+                if ginfo['description'] != "No description":
+                    desc += f"📝 {ginfo['description'][:100]}\n"
+                desc += "\n"
+            
+            embed.description = desc
+            
+            embed.add_field(
+                name="📊 Summary",
+                value=f"**Servers:** {len(bot.guilds)}\n**Total Members:** {format_number(total_members)}\n**Humans:** {format_number(total_humans)}\n**Bots:** {format_number(total_bots)}\n**Avg Members:** {format_number(total_members // len(bot.guilds)) if bot.guilds else 0}",
+                inline=True
+            )
+            
+            if bot.shard_count:
+                embed.add_field(
+                    name="🔧 Shard Info",
+                    value=f"**Shards:** {bot.shard_count}\n**Latency:** {round(bot.latency * 1000)}ms",
+                    inline=True
+                )
+            
+            embed.set_footer(
+                text=f"Page {page}/{total_pages} • Sorted by members • {len(guilds_info)} servers",
+                icon_url=ctx.author.avatar.url if ctx.author.avatar else None
+            )
+            embed.timestamp = datetime.now(timezone.utc)
+            
+            return embed
+        
+        embed = await build_embed(current_page)
+        
+        if total_pages == 1:
+            return await ctx.send(embed=embed)
+        
+        class ServerLeaderboardView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.current_page = 1
+                self.message = None
+            
+            @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
+            async def prev(self, inter: discord.Interaction, btn: discord.ui.Button):
+                if inter.user != ctx.author:
+                    return await inter.response.send_message("Not your menu!", ephemeral=True)
+                self.current_page = (self.current_page - 1) % total_pages
+                if self.current_page == 0:
+                    self.current_page = total_pages
+                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
+            
+            @discord.ui.button(label="📄 Jump", style=discord.ButtonStyle.secondary)
+            async def jump(self, inter: discord.Interaction, btn: discord.ui.Button):
+                if inter.user != ctx.author:
+                    return await inter.response.send_message("Not your menu!", ephemeral=True)
+                modal = ServerPageModal(self, total_pages, build_embed, ctx)
+                await inter.response.send_modal(modal)
+            
+            @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
+            async def nxt(self, inter: discord.Interaction, btn: discord.ui.Button):
+                if inter.user != ctx.author:
+                    return await inter.response.send_message("Not your menu!", ephemeral=True)
+                self.current_page = (self.current_page + 1) % total_pages
+                if self.current_page == 0:
+                    self.current_page = 1
+                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
+            
+            async def on_timeout(self):
+                try:
+                    for child in self.children:
+                        child.disabled = True
+                    if self.message:
+                        await self.message.edit(view=self)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+        
+        view = ServerLeaderboardView()
+        msg = await ctx.send(embed=embed, view=view)
+        view.message = msg
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error loading server list: {e}")
+        print(f"Server list error: {e}")
 
 # ==================================================
 # EVENTS
@@ -3289,7 +3575,8 @@ async def on_message(message):
         recent_message_authors[guild_id].append(message.author.id)
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.author.id,))
-        await db.execute("UPDATE users SET daily_messages = daily_messages + 1 WHERE user_id = ?", (message.author.id,))
+        await db.execute("UPDATE users SET daily_messages = daily_messages + 1, last_message = ? WHERE user_id = ?", 
+                         (datetime.now(timezone.utc).isoformat(), message.author.id))
         await db.commit()
     await update_quest_progress(message.author.id, "messages", 1)
     new_lvl = await add_xp(message.author.id, random.randint(10,20))
