@@ -26,7 +26,7 @@ recent_message_authors = {}
 active_wordle_games = {}
 
 # Invite tracking cache
-invite_cache = {}  # guild_id -> {invite_code: {"inviter": user_id, "uses": int}}
+invite_cache = {}
 
 # ==================================================
 # NUMBER FORMATTING
@@ -418,7 +418,6 @@ async def set_gambling_cooldown(uid, seconds=3):
 # INVITE TRACKING SYSTEM
 # ==================================================
 async def cache_invites():
-    """Cache all existing invites for all guilds"""
     for guild in bot.guilds:
         try:
             invites = await guild.invites()
@@ -431,7 +430,6 @@ async def cache_invites():
 
 @bot.event
 async def on_invite_create(invite):
-    """Track when an invite is created"""
     if invite.guild.id not in invite_cache:
         invite_cache[invite.guild.id] = {}
     invite_cache[invite.guild.id][invite.code] = {"inviter": invite.inviter.id, "uses": invite.uses}
@@ -442,13 +440,11 @@ async def on_invite_create(invite):
 
 @bot.event
 async def on_invite_delete(invite):
-    """Track when an invite is deleted"""
     if invite.guild.id in invite_cache:
         invite_cache[invite.guild.id].pop(invite.code, None)
 
 @bot.event
 async def on_member_join(member):
-    """Track member joins and attribute to inviter"""
     if member.bot:
         return
     guild = member.guild
@@ -476,7 +472,6 @@ async def on_member_join(member):
 
 @bot.event
 async def on_member_remove(member):
-    """Track member leaves (simple increment)"""
     if member.bot:
         return
     guild = member.guild
@@ -499,7 +494,6 @@ async def on_member_remove(member):
 @bot.command(name="ci", aliases=["createinvite"], help="Create a permanent invite link")
 @economy_check()
 async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
-    """Create a permanent invite (default: unlimited uses, never expires)"""
     try:
         invite = await ctx.channel.create_invite(max_uses=max_uses, max_age=max_age, reason=f"Created by {ctx.author.name}")
         if ctx.guild.id not in invite_cache:
@@ -521,7 +515,6 @@ async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
 @bot.command(name="i", aliases=["invites", "inv"], help="Check invite stats - .i [@user]")
 @economy_check()
 async def invite_stats(ctx, user: discord.User = None):
-    """Show invite statistics for a user"""
     if user is None:
         user = ctx.author
     data = await get_user(user.id)
@@ -541,7 +534,7 @@ async def invite_stats(ctx, user: discord.User = None):
     await ctx.send(embed=embed)
 
 # ==================================================
-# STATS COMMAND (Gambling won/lost)
+# STATS COMMAND
 # ==================================================
 @bot.command(name="stats", help="Show your gambling stats (money won and lost)")
 @economy_check()
@@ -737,7 +730,7 @@ async def badge_select(ctx, badge1: str = None, badge2: str = None, badge3: str 
     await ctx.send(f"Showcase badges set: {', '.join(selected)}" if selected else "Showcase cleared.")
 
 # ==================================================
-# ECONOMY COMMANDS (with all/half support)
+# ECONOMY COMMANDS
 # ==================================================
 @bot.command(name="bal", aliases=["balance"])
 @economy_check()
@@ -885,7 +878,7 @@ async def crime(ctx):
     await ctx.send(f"Crime successful! +{format_number(reward)}{emoji}")
 
 # ==================================================
-# ROB COMMAND (WEIGHTED STEAL - NO CAP)
+# ROB COMMAND
 # ==================================================
 @bot.command(name="rob")
 @economy_check()
@@ -939,7 +932,7 @@ async def interest(ctx):
     await ctx.send(f"Bank interest rate: {rate}% per 24h on balances up to 50,000{emoji}.")
 
 # ==================================================
-# SECURITY COMMAND (1-8 HOURS, DOUBLES EACH HOUR)
+# SECURITY COMMAND
 # ==================================================
 @bot.command(name="security")
 @economy_check()
@@ -1048,7 +1041,7 @@ async def loaninfo(ctx):
         await ctx.send(f"Loan: {format_number(data['loan_amount'])}{emoji}")
 
 # ==================================================
-# GAMBLING COMMANDS (with stats tracking)
+# GAMBLING COMMANDS
 # ==================================================
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
@@ -1948,7 +1941,7 @@ async def baccarat(ctx, amount_str: str, bet_on: str = None):
     await set_gambling_cooldown(ctx.author.id)
 
 # ==================================================
-# BANK HEIST SYSTEM (REWORKED - 2-10 players, 40% max)
+# BANK HEIST SYSTEM
 # ==================================================
 class HeistJoinView(discord.ui.View):
     def __init__(self, leader_id):
@@ -2780,10 +2773,17 @@ class HelpPaginator(discord.ui.View):
         self.update_buttons()
     def update_buttons(self):
         self.clear_items()
-        for i in range(min(len(self.pages), 8)):
-            btn = discord.ui.Button(label=str(i+1), style=discord.ButtonStyle.secondary if i != self.current else discord.ButtonStyle.primary, row=0)
+        # Add number buttons in rows of 4
+        num_buttons = min(len(self.pages), 8)
+        for i in range(num_buttons):
+            btn = discord.ui.Button(
+                label=str(i+1), 
+                style=discord.ButtonStyle.secondary if i != self.current else discord.ButtonStyle.primary, 
+                row=0
+            )
             btn.callback = self.make_callback(i)
             self.add_item(btn)
+        # Navigation row
         prev_btn = discord.ui.Button(label="◀", style=discord.ButtonStyle.primary, row=1, disabled=self.current==0)
         prev_btn.callback = self.prev_page
         self.add_item(prev_btn)
@@ -3122,7 +3122,7 @@ async def servers_list(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# EVENTS (Level-up messages auto-delete after 5s)
+# EVENTS
 # ==================================================
 @bot.event
 async def on_ready():
