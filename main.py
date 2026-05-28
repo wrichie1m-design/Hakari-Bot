@@ -2743,22 +2743,32 @@ async def set_invite_reward(ctx, invites: int, amount_str: str):
 # ==================================================
 # HELP COMMAND WITH CLICKABLE PAGE BUTTONS
 # ==================================================
-@bot.command(name="cmds", aliases=["commands"])
-async def help_cmd(ctx):
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    pages = [
-        discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="Commands", value=f"`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)\n`.rob @user` - Rob someone (1h, up to 50%)\n`.pay @user all/half/1k` - Pay someone\n`.interest` - View bank rate\n`.security 1-8` - Buy protection (10M base, doubles each hour)", inline=False),
-        discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="Commands", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details", inline=False),
-        discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack\n`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.roulette all/half/1k <bet>` - Roulette\n`.highlow all/half/1k h/l` - High/Low\n`.dice all/half/1k 1-6` - Dice (5x)\n`.horserace all/half/1k A/B/C/D` - Horse race\n`.rps all/half/1k` - Rock Paper Scissors\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries, 5min)", inline=False),
-        discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="Commands", value="`.bankheist` - Start bank heist\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
-        discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="Commands", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
-        discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="Commands", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop\n`.gm` - Global market\n`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
-        discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="Commands", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests", inline=False),
-        discord.Embed(title="📊 Other", color=0x9b59b6).add_field(name="Commands", value="`.tasks` - Quest board\n`.badges` - View badges\n`.bs` - Badge select\n`.level` - Check level\n`.topcouples` - Top couples\n`.glb money/xp` - Global leaderboard\n`.slb money/xp` - Server leaderboard\n`.pricepool` - Invite reward\n`.claim` - Claim info\n`.glinv` - Invite leaderboard\n`.stats` - Gambling stats (won/lost)", inline=False),
-    ]
-    view = HelpPaginator(ctx, pages)
-    msg = await ctx.send(embed=pages[0], view=view)
-    view.message = msg
+@bot.command(name="cmds")
+async def cmds_command(ctx):
+    """Show all commands"""
+    try:
+        emoji = await get_setting(ctx.guild.id, "currency_emoji")
+        pages = [
+            discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="Commands", value=f"`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)\n`.rob @user` - Rob someone (1h, up to 50%)\n`.pay @user all/half/1k` - Pay someone\n`.interest` - View bank rate\n`.security 1-8` - Buy protection (10M base, doubles each hour)", inline=False),
+            discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="Commands", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details", inline=False),
+            discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack\n`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.roulette all/half/1k <bet>` - Roulette\n`.highlow all/half/1k h/l` - High/Low\n`.dice all/half/1k 1-6` - Dice (5x)\n`.horserace all/half/1k A/B/C/D` - Horse race\n`.rps all/half/1k` - Rock Paper Scissors\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries, 5min)", inline=False),
+            discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="Commands", value="`.bankheist` - Start bank heist\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
+            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="Commands", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
+            discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="Commands", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop\n`.gm` - Global market\n`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
+            discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="Commands", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests", inline=False),
+            discord.Embed(title="📊 Other", color=0x9b59b6).add_field(name="Commands", value="`.tasks` - Quest board\n`.badges` - View badges\n`.bs` - Badge select\n`.level` - Check level\n`.topcouples` - Top couples\n`.glb money/xp` - Global leaderboard\n`.slb money/xp` - Server leaderboard\n`.pricepool` - Invite reward\n`.claim` - Claim info\n`.glinv` - Invite leaderboard\n`.stats` - Gambling stats (won/lost)", inline=False),
+        ]
+        view = HelpPaginator(ctx, pages)
+        msg = await ctx.send(embed=pages[0], view=view)
+        view.message = msg
+    except Exception as e:
+        await ctx.send(f"❌ Error loading help menu: {e}")
+        print(f"Help error: {e}")
+
+@bot.command(name="commands")
+async def commands_cmd(ctx):
+    """Alias for cmds"""
+    await cmds_command(ctx)
 
 class HelpPaginator(discord.ui.View):
     def __init__(self, ctx, pages):
