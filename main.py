@@ -462,7 +462,6 @@ async def on_member_join(member):
                 account_age = (datetime.now(timezone.utc) - member.created_at.replace(tzinfo=timezone.utc)).days
                 is_fake = account_age < 30
                 async with aiosqlite.connect("hakari.db") as db:
-                    # Simple join detection – no rejoin tracking in this simplified version
                     if is_fake:
                         await db.execute("UPDATE users SET invite_fake = invite_fake + 1 WHERE user_id = ?", (inviter_id,))
                     else:
@@ -480,8 +479,6 @@ async def on_member_remove(member):
     """Track member leaves (simple increment)"""
     if member.bot:
         return
-    # In a production bot you would need to identify which invite this member used.
-    # Here we do a simple attempt: if any invite use decreased, attribute to that inviter.
     guild = member.guild
     try:
         current_invites = await guild.invites()
@@ -1281,7 +1278,10 @@ class MinesView(discord.ui.View):
     async def on_timeout(self):
         if not self.ended:
             await update_gambling_stats(self.ctx.author.id, lost=self.bet)
-            await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
+            try:
+                await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
+            except:
+                pass
             await set_gambling_cooldown(self.ctx.author.id)
 
 @bot.command(name="mines")
@@ -1341,7 +1341,11 @@ class CrashView(discord.ui.View):
                 embed.add_field(name="Multiplier", value=f"{self.multiplier}x", inline=True)
                 embed.add_field(name="Potential Win", value=f"{format_number(int(self.bet * self.multiplier))} {self.emoji}", inline=True)
                 embed.set_footer(text="Click 'Cash Out' to secure your winnings!")
-                if self.message: await self.message.edit(embed=embed, view=self)
+                if self.message: 
+                    try:
+                        await self.message.edit(embed=embed, view=self)
+                    except discord.NotFound:
+                        return
                 await asyncio.sleep(0.6)
         except (discord.NotFound, asyncio.CancelledError): pass
     async def crash(self):
@@ -1491,7 +1495,10 @@ class TowerDoorView(discord.ui.View):
     async def on_timeout(self):
         if not self.game_over:
             await update_gambling_stats(self.ctx.author.id, lost=self.bet)
-            await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
+            try:
+                await self.ctx.send(f"⏰ {self.ctx.author.mention} took too long! Lost {format_number(self.bet)}{self.emoji}.")
+            except:
+                pass
             await set_gambling_cooldown(self.ctx.author.id)
 
 @bot.command(name="tower")
@@ -1634,7 +1641,10 @@ async def horserace(ctx, amount_str: str, horse: str):
     ]
     for f in frames:
         await asyncio.sleep(1)
-        await msg.edit(content=f)
+        try:
+            await msg.edit(content=f)
+        except:
+            break
     if horse==winner:
         payout = int(amount*horses[winner])
         await update_money(ctx.author.id, payout)
@@ -1758,7 +1768,10 @@ async def plinko(ctx, amount_str: str, risk: str = "medium", rows: int = 12):
         for c in range(slots):
             slot_line += f"🔴{multipliers[c]}x " if step == rows and c == path[-1] else f" {multipliers[c]}x "
         board += slot_line
-        await msg.edit(content=f"🎱 Plinko\n```\n{board}```")
+        try:
+            await msg.edit(content=f"🎱 Plinko\n```\n{board}```")
+        except:
+            break
         await asyncio.sleep(0.4)
     win_amount = int(amount * multiplier)
     if multiplier > 1:
@@ -1774,7 +1787,10 @@ async def plinko(ctx, amount_str: str, risk: str = "medium", rows: int = 12):
         lost_amount = amount - win_amount
         await update_gambling_stats(ctx.author.id, lost=lost_amount)
         result_text = f"🔴 Lost! Multiplier x{multiplier}, lost {format_number(lost_amount)}{emoji}."
-    await msg.edit(content=f"{msg.content}\n{result_text}")
+    try:
+        await msg.edit(content=f"{msg.content}\n{result_text}")
+    except:
+        await ctx.send(result_text)
     await set_gambling_cooldown(ctx.author.id)
 
 # Wordle
@@ -1953,33 +1969,36 @@ class HeistJoinView(discord.ui.View):
         await self.message.edit(embed=embed)
         await interaction.response.send_message("You're in!", ephemeral=True)
     async def on_timeout(self):
-        if len(self.members) < 2:
-            await self.message.edit(content="❌ Heist cancelled - need at least 2 members!", view=None)
-            return
-        member_count = len(self.members)
-        success_chance = min(0.20 + (member_count * 0.02), 0.40)
-        success = random.random() < success_chance
-        if success:
-            reward_per_member = 100000 // member_count
-            for uid in self.members:
-                await update_money(uid, reward_per_member)
-            embed = discord.Embed(title="🏦 Bank Heist Successful!",
-                                  description=f"Split 100k between {member_count} members!\nEach got {format_number(reward_per_member)}💰",
-                                  color=0x2ecc71)
-        else:
-            fine_per_member = 50000 // member_count
-            for uid in self.members:
-                await update_money(uid, -fine_per_member)
-            embed = discord.Embed(title="🚔 Bank Heist Failed!",
-                                  description=f"Police caught you!\nEach member lost {format_number(fine_per_member)}💰",
-                                  color=0xe74c3c)
-        async with aiosqlite.connect("hakari.db") as db:
-            for uid in self.members:
-                await db.execute("UPDATE users SET last_heist=? WHERE user_id=?",
-                               (datetime.now(timezone.utc).isoformat(), uid))
-            await db.commit()
-        await self.message.channel.send(embed=embed)
-        await self.message.delete()
+        try:
+            if len(self.members) < 2:
+                await self.message.edit(content="❌ Heist cancelled - need at least 2 members!", view=None)
+                return
+            member_count = len(self.members)
+            success_chance = min(0.20 + (member_count * 0.02), 0.40)
+            success = random.random() < success_chance
+            if success:
+                reward_per_member = 100000 // member_count
+                for uid in self.members:
+                    await update_money(uid, reward_per_member)
+                embed = discord.Embed(title="🏦 Bank Heist Successful!",
+                                      description=f"Split 100k between {member_count} members!\nEach got {format_number(reward_per_member)}💰",
+                                      color=0x2ecc71)
+            else:
+                fine_per_member = 50000 // member_count
+                for uid in self.members:
+                    await update_money(uid, -fine_per_member)
+                embed = discord.Embed(title="🚔 Bank Heist Failed!",
+                                      description=f"Police caught you!\nEach member lost {format_number(fine_per_member)}💰",
+                                      color=0xe74c3c)
+            async with aiosqlite.connect("hakari.db") as db:
+                for uid in self.members:
+                    await db.execute("UPDATE users SET last_heist=? WHERE user_id=?",
+                                   (datetime.now(timezone.utc).isoformat(), uid))
+                await db.commit()
+            await self.message.channel.send(embed=embed)
+            await self.message.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 @bot.command(name="bankheist")
 @economy_check()
@@ -2506,7 +2525,7 @@ async def glb(ctx, category: str = "money"):
         embed = await build_embed(current_page)
         if total_pages==1: return await ctx.send(embed=embed)
         class LeaderboardView(discord.ui.View):
-            def __init__(self): super().__init__(timeout=120); self.current_page=1
+            def __init__(self): super().__init__(timeout=120); self.current_page=1; self.message = None
             @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
             async def prev(self, inter, btn):
                 if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
@@ -2520,8 +2539,12 @@ async def glb(ctx, category: str = "money"):
                 if self.current_page==0: self.current_page=1
                 await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
             async def on_timeout(self):
-                for child in self.children: child.disabled=True
-                await self.message.edit(view=self)
+                try:
+                    for child in self.children: child.disabled=True
+                    if self.message:
+                        await self.message.edit(view=self)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
         view = LeaderboardView()
         msg = await ctx.send(embed=embed, view=view); view.message=msg
     except Exception as e:
@@ -2567,7 +2590,7 @@ async def slb(ctx, category: str = "money"):
         embed = await build_embed(current_page)
         if total_pages==1: return await ctx.send(embed=embed)
         class LeaderboardView(discord.ui.View):
-            def __init__(self): super().__init__(timeout=120); self.current_page=1
+            def __init__(self): super().__init__(timeout=120); self.current_page=1; self.message = None
             @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
             async def prev(self, inter, btn):
                 if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
@@ -2581,8 +2604,12 @@ async def slb(ctx, category: str = "money"):
                 if self.current_page==0: self.current_page=1
                 await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
             async def on_timeout(self):
-                for child in self.children: child.disabled=True
-                await self.message.edit(view=self)
+                try:
+                    for child in self.children: child.disabled=True
+                    if self.message:
+                        await self.message.edit(view=self)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
         view = LeaderboardView()
         msg = await ctx.send(embed=embed, view=view); view.message=msg
     except Exception as e:
@@ -2618,7 +2645,7 @@ async def level(ctx):
     await ctx.send(embed=embed)
 
 # ==================================================
-# INVITE REWARD COMMANDS (unchanged)
+# INVITE REWARD COMMANDS
 # ==================================================
 @bot.command(name="pricepool", aliases=["pp"])
 @economy_check()
@@ -2678,7 +2705,7 @@ async def global_invites(ctx):
     embed=await build_embed(current_page)
     if total_pages==1: return await ctx.send(embed=embed)
     class LeaderboardView(discord.ui.View):
-        def __init__(self): super().__init__(timeout=120); self.current_page=1
+        def __init__(self): super().__init__(timeout=120); self.current_page=1; self.message = None
         @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
         async def prev(self, inter, btn):
             if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
@@ -2692,8 +2719,12 @@ async def global_invites(ctx):
             if self.current_page==0: self.current_page=1
             await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
         async def on_timeout(self):
-            for child in self.children: child.disabled=True
-            await self.message.edit(view=self)
+            try:
+                for child in self.children: child.disabled=True
+                if self.message:
+                    await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
     view = LeaderboardView()
     msg = await ctx.send(embed=embed, view=view); view.message=msg
 
@@ -2726,7 +2757,8 @@ async def help_cmd(ctx):
         discord.Embed(title="📊 Other", color=0x9b59b6).add_field(name="Commands", value="`.tasks` - Quest board\n`.badges` - View badges\n`.bs` - Badge select\n`.level` - Check level\n`.topcouples` - Top couples\n`.glb money/xp` - Global leaderboard\n`.slb money/xp` - Server leaderboard\n`.pricepool` - Invite reward\n`.claim` - Claim info\n`.glinv` - Invite leaderboard\n`.stats` - Gambling stats (won/lost)", inline=False),
     ]
     view = HelpPaginator(ctx, pages)
-    await ctx.send(embed=pages[0], view=view)
+    msg = await ctx.send(embed=pages[0], view=view)
+    view.message = msg
 
 class HelpPaginator(discord.ui.View):
     def __init__(self, ctx, pages):
@@ -2734,6 +2766,7 @@ class HelpPaginator(discord.ui.View):
         self.ctx = ctx
         self.pages = pages
         self.current = 0
+        self.message = None
         self.update_buttons()
     def update_buttons(self):
         self.clear_items()
@@ -2771,6 +2804,13 @@ class HelpPaginator(discord.ui.View):
             self.current += 1
             self.update_buttons()
             await interaction.response.edit_message(embed=self.pages[self.current], view=self)
+    async def on_timeout(self):
+        try:
+            for child in self.children: child.disabled=True
+            if self.message:
+                await self.message.edit(view=self)
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 # ==================================================
 # OWNER COMMANDS
