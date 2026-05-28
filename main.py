@@ -491,7 +491,7 @@ async def on_member_remove(member):
     except:
         pass
 
-@bot.command(name="ci", aliases=["createinvite"], help="Create a permanent invite link")
+@bot.command(name="ci", aliases=["createinvite"])
 @economy_check()
 async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
     try:
@@ -512,9 +512,10 @@ async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
     except Exception as e:
         await ctx.send(f"❌ Failed to create invite: {e}")
 
-@bot.command(name="i", aliases=["invites", "inv"], help="Check invite stats - .i [@user]")
+@bot.command(name="i", aliases=["invites", "inv"])
 @economy_check()
 async def invite_stats(ctx, user: discord.User = None):
+    """Show invite statistics for a user with profile picture"""
     if user is None:
         user = ctx.author
     data = await get_user(user.id)
@@ -523,20 +524,22 @@ async def invite_stats(ctx, user: discord.User = None):
     fake = data.get('invite_fake', 0)
     rejoins = data.get('invite_rejoins', 0)
     total = joins + left + fake + rejoins
+    
     embed = discord.Embed(title="📊 Invite Log", color=0x3498db)
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
     embed.description = f"> **{user.name}** has **{total}** invites"
-    embed.add_field(name="Joins", value=str(joins), inline=True)
-    embed.add_field(name="Left", value=str(left), inline=True)
-    embed.add_field(name="Fake", value=str(fake), inline=True)
-    embed.add_field(name="Rejoins (7d)", value=str(rejoins), inline=True)
-    embed.set_footer(text=f"Requested by {ctx.author.name}")
+    embed.add_field(name="✅ Joins", value=str(joins), inline=True)
+    embed.add_field(name="❌ Left", value=str(left), inline=True)
+    embed.add_field(name="⚠️ Fake", value=str(fake), inline=True)
+    embed.add_field(name="🔄 Rejoins (7d)", value=str(rejoins), inline=True)
+    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
     embed.timestamp = datetime.now(timezone.utc)
     await ctx.send(embed=embed)
 
 # ==================================================
 # STATS COMMAND
 # ==================================================
-@bot.command(name="stats", help="Show your gambling stats (money won and lost)")
+@bot.command(name="stats")
 @economy_check()
 async def stats_cmd(ctx):
     data = await get_user(ctx.author.id)
@@ -2734,22 +2737,24 @@ async def set_invite_reward(ctx, invites: int, amount_str: str):
     await ctx.send(f"Invite reward set: {invites} invites = {format_number(amount)}{emoji}")
 
 # ==================================================
-# HELP COMMAND WITH PAGE MODAL
+# HELP COMMANDS
 # ==================================================
-@bot.command(name="cmds", aliases=["ccmds"])
+@bot.command(name="cmds")
 async def cmds_command(ctx):
     """Show all commands"""
     try:
         emoji = await get_setting(ctx.guild.id, "currency_emoji")
         pages = [
-            discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="Commands", value=f"`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)\n`.rob @user` - Rob someone (1h, up to 50%)\n`.pay @user all/half/1k` - Pay someone\n`.interest` - View bank rate\n`.security 1-8` - Buy protection (10M base, doubles each hour)", inline=False),
-            discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="Commands", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details", inline=False),
-            discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack\n`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.roulette all/half/1k <bet>` - Roulette\n`.highlow all/half/1k h/l` - High/Low\n`.dice all/half/1k 1-6` - Dice (5x)\n`.horserace all/half/1k A/B/C/D` - Horse race\n`.rps all/half/1k` - Rock Paper Scissors\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries, 5min)", inline=False),
-            discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="Commands", value="`.bankheist` - Start bank heist\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
-            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="Commands", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
-            discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="Commands", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop\n`.gm` - Global market\n`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
-            discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="Commands", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests", inline=False),
-            discord.Embed(title="📊 Other", color=0x9b59b6).add_field(name="Commands", value="`.tasks` - Quest board\n`.badges` - View badges\n`.bs` - Badge select\n`.level` - Check level\n`.topcouples` - Top couples\n`.glb money/xp` - Global leaderboard\n`.slb money/xp` - Server leaderboard\n`.pricepool` - Invite reward\n`.claim` - Claim info\n`.glinv` - Invite leaderboard\n`.stats` - Gambling stats (won/lost)", inline=False),
+            discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="💼 Economy", value="`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.pay @user all/half/1k` - Pay someone", inline=False).add_field(name="💵 Income", value="`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)", inline=False).add_field(name="🔫 Crime", value="`.rob @user` - Rob someone (1h, up to 50%)\n`.bankheist` - Start bank heist (2-10 players)", inline=False).add_field(name="🏦 Bank", value="`.interest` - View bank rate (5% per 24h)\n`.security 1-8` - Buy protection (10M base)", inline=False),
+            discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="💳 Loans", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details\n\n• 10% interest per hour\n• Max loan: 50,000 coins", inline=False),
+            discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="🎲 Classic Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.dice all/half/1k 1-6` - Dice (5x)\n`.rps all/half/1k` - Rock Paper Scissors\n`.highlow all/half/1k h/l` - High/Low (1.1x)", inline=False).add_field(name="🎰 Casino Games", value="`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack (2.5x)\n`.roulette all/half/1k <bet>` - Roulette\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)", inline=False).add_field(name="🎮 Mini Games", value="`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries)\n`.horserace all/half/1k A/B/C/D` - Horse race", inline=False),
+            discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="🏦 Heist", value="`.bankheist` - Start bank heist\n\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
+            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
+            discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="🏪 Shop", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View your shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop open/closed\n`.gm` - Global market", inline=False).add_field(name="🏢 Business", value="`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade business\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
+            discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="💕 Relationships", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests\n`.topcouples` - Top couples", inline=False),
+            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats\n`.ci [uses] [age]` - Create invite link\n`.glinv` - Invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• ✅ Joins\n• ❌ Left\n• ⚠️ Fake accounts\n• 🔄 Rejoins\n\nProfile picture included!", inline=False),
+            discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n\n• Earn XP by chatting\n• Level up every 100 XP per level²\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges\n\nComplete quests for bonus coins!", inline=False),
+            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
@@ -2757,6 +2762,24 @@ async def cmds_command(ctx):
     except Exception as e:
         await ctx.send(f"❌ Error loading help menu: {e}")
         print(f"Help error: {e}")
+
+@bot.command(name="ccmds")
+@owner_only()
+async def ccmds_command(ctx):
+    """Show owner commands"""
+    try:
+        pages = [
+            discord.Embed(title="👑 Owner Commands - Money", color=0xe74c3c).add_field(name="💰 Money Management", value="`.addmoney @user <amount>` - Add money to user\n`.removemoney @user all/half/amount` - Remove money\n`.setmoney @user <amount>` - Set wallet balance\n`.addbank @user <amount>` - Add to bank\n`.removebank @user all/half/amount` - Remove from bank", inline=False).add_field(name="🔧 Utilities", value="`.avt @user` - Toggle tax exemption\n`.protect @user` - Protect from robs\n`.unprotect @user` - Remove protection\n`.sst @user` - Reset rob cooldown", inline=False),
+            discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
+            discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward", inline=False),
+            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="📊 Invite Management", value="`.addinvites @user <amount>` - Add invites manually\n`.setinvitereward <invites> <amount>` - Set reward\n`.glinv` - View invite leaderboard", inline=False),
+        ]
+        view = HelpPaginator(ctx, pages)
+        msg = await ctx.send(embed=pages[0], view=view)
+        view.message = msg
+    except Exception as e:
+        await ctx.send(f"❌ Error loading owner help: {e}")
+        print(f"Owner help error: {e}")
 
 @bot.command(name="commands", aliases=["commandlist"])
 async def commands_cmd(ctx):
@@ -2773,15 +2796,12 @@ class HelpPaginator(discord.ui.View):
         self.update_buttons()
     def update_buttons(self):
         self.clear_items()
-        # Previous button
         prev_btn = discord.ui.Button(label="◀", style=discord.ButtonStyle.primary, disabled=self.current==0)
         prev_btn.callback = self.prev_page
         self.add_item(prev_btn)
-        # Page number button (clickable to open modal)
         page_btn = discord.ui.Button(label=f"📄 Page {self.current+1}/{len(self.pages)}", style=discord.ButtonStyle.secondary)
         page_btn.callback = self.open_page_modal
         self.add_item(page_btn)
-        # Next button
         next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.primary, disabled=self.current==len(self.pages)-1)
         next_btn.callback = self.next_page
         self.add_item(next_btn)
