@@ -2734,9 +2734,9 @@ async def set_invite_reward(ctx, invites: int, amount_str: str):
     await ctx.send(f"Invite reward set: {invites} invites = {format_number(amount)}{emoji}")
 
 # ==================================================
-# HELP COMMAND WITH CLICKABLE PAGE BUTTONS
+# HELP COMMAND WITH PAGE MODAL
 # ==================================================
-@bot.command(name="cmds")
+@bot.command(name="cmds", aliases=["ccmds"])
 async def cmds_command(ctx):
     """Show all commands"""
     try:
@@ -2758,7 +2758,7 @@ async def cmds_command(ctx):
         await ctx.send(f"❌ Error loading help menu: {e}")
         print(f"Help error: {e}")
 
-@bot.command(name="commands")
+@bot.command(name="commands", aliases=["commandlist"])
 async def commands_cmd(ctx):
     """Alias for cmds"""
     await cmds_command(ctx)
@@ -2773,47 +2773,41 @@ class HelpPaginator(discord.ui.View):
         self.update_buttons()
     def update_buttons(self):
         self.clear_items()
-        # Add number buttons in rows of 4
-        num_buttons = min(len(self.pages), 8)
-        for i in range(num_buttons):
-            btn = discord.ui.Button(
-                label=str(i+1), 
-                style=discord.ButtonStyle.secondary if i != self.current else discord.ButtonStyle.primary, 
-                row=0
-            )
-            btn.callback = self.make_callback(i)
-            self.add_item(btn)
-        # Navigation row
-        prev_btn = discord.ui.Button(label="◀", style=discord.ButtonStyle.primary, row=1, disabled=self.current==0)
+        # Previous button
+        prev_btn = discord.ui.Button(label="◀", style=discord.ButtonStyle.primary, disabled=self.current==0)
         prev_btn.callback = self.prev_page
         self.add_item(prev_btn)
-        page_label = discord.ui.Button(label=f"Page {self.current+1}/{len(self.pages)}", style=discord.ButtonStyle.secondary, row=1, disabled=True)
-        self.add_item(page_label)
-        next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.primary, row=1, disabled=self.current==len(self.pages)-1)
+        # Page number button (clickable to open modal)
+        page_btn = discord.ui.Button(label=f"📄 Page {self.current+1}/{len(self.pages)}", style=discord.ButtonStyle.secondary)
+        page_btn.callback = self.open_page_modal
+        self.add_item(page_btn)
+        # Next button
+        next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.primary, disabled=self.current==len(self.pages)-1)
         next_btn.callback = self.next_page
         self.add_item(next_btn)
-    def make_callback(self, page_num):
-        async def callback(interaction):
-            if interaction.user != self.ctx.author:
-                return await interaction.response.send_message("Not your menu!", ephemeral=True)
-            self.current = page_num
-            self.update_buttons()
-            await interaction.response.edit_message(embed=self.pages[self.current], view=self)
-        return callback
-    async def prev_page(self, interaction):
+    async def open_page_modal(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("Not your menu!", ephemeral=True)
+        modal = PageModal(self)
+        await interaction.response.send_modal(modal)
+    async def prev_page(self, interaction: discord.Interaction):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("Not your menu!", ephemeral=True)
         if self.current > 0:
             self.current -= 1
             self.update_buttons()
             await interaction.response.edit_message(embed=self.pages[self.current], view=self)
-    async def next_page(self, interaction):
+        else:
+            await interaction.response.defer()
+    async def next_page(self, interaction: discord.Interaction):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("Not your menu!", ephemeral=True)
         if self.current < len(self.pages) - 1:
             self.current += 1
             self.update_buttons()
             await interaction.response.edit_message(embed=self.pages[self.current], view=self)
+        else:
+            await interaction.response.defer()
     async def on_timeout(self):
         try:
             for child in self.children: child.disabled=True
@@ -2821,6 +2815,31 @@ class HelpPaginator(discord.ui.View):
                 await self.message.edit(view=self)
         except (discord.NotFound, discord.HTTPException):
             pass
+
+class PageModal(discord.ui.Modal):
+    def __init__(self, paginator: HelpPaginator):
+        super().__init__(title="Go to Page", timeout=60)
+        self.paginator = paginator
+        self.page_input = discord.ui.TextInput(
+            label=f"Page number (1-{len(paginator.pages)})",
+            placeholder="e.g. 2",
+            min_length=1,
+            max_length=2,
+            required=True
+        )
+        self.add_item(self.page_input)
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user != self.paginator.ctx.author:
+            return await interaction.response.send_message("Not your menu!", ephemeral=True)
+        try:
+            page_num = int(self.page_input.value)
+            if page_num < 1 or page_num > len(self.paginator.pages):
+                return await interaction.response.send_message(f"❌ Please enter a number between 1 and {len(self.paginator.pages)}.", ephemeral=True)
+            self.paginator.current = page_num - 1
+            self.paginator.update_buttons()
+            await interaction.response.edit_message(embed=self.paginator.pages[self.paginator.current], view=self.paginator)
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
 
 # ==================================================
 # OWNER COMMANDS
