@@ -25,9 +25,6 @@ gambling_cooldowns = {}
 recent_message_authors = {}
 active_wordle_games = {}
 
-# Invite tracking cache
-invite_cache = {}
-
 # ==================================================
 # NUMBER FORMATTING
 # ==================================================
@@ -419,98 +416,254 @@ async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 # ==================================================
-# INVITE TRACKING SYSTEM
+# INVITE TRACKING SYSTEM (FULLY REWORKED)
 # ==================================================
+invite_cache = {}  # {guild_id: {invite_code: uses}}
+
 async def cache_invites():
+    """Cache all existing invites for all guilds on startup"""
     for guild in bot.guilds:
         try:
             invites = await guild.invites()
-            if guild.id not in invite_cache:
-                invite_cache[guild.id] = {}
+            invite_cache[guild.id] = {}
             for inv in invites:
-                invite_cache[guild.id][inv.code] = {"inviter": inv.inviter.id, "uses": inv.uses}
-        except:
-            pass
+                invite_cache[guild.id][inv.code] = inv.uses
+            print(f"Cached {len(invites)} invites for {guild.name}")
+        except Exception as e:
+            print(f"Failed to cache invites for {guild.name}: {e}")
+            invite_cache[guild.id] = {}
+
+async def update_invite_cache(guild):
+    """Update the invite cache for a specific guild"""
+    try:
+        invites = await guild.invites()
+        if guild.id not in invite_cache:
+            invite_cache[guild.id] = {}
+        for inv in invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+    except:
+        pass
+
+async def find_used_invite(guild):
+    """Find which invite was used by comparing old and new invite uses"""
+    try:
+        new_invites = await guild.invites()
+        old_cache = invite_cache.get(guild.id, {})
+        
+        used_invite = None
+        
+        for inv in new_invites:
+            old_uses = old_cache.get(inv.code, 0)
+            if inv.uses > old_uses:
+                used_invite = inv
+                break
+        
+        # Update cache
+        if guild.id not in invite_cache:
+            invite_cache[guild.id] = {}
+        for inv in new_invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+        
+        return used_invite
+    except Exception as e:
+        print(f"Error finding used invite: {e}")
+        await update_invite_cache(guild)
+        return None
 
 @bot.event
 async def on_invite_create(invite):
+    """Track when an invite is created"""
     if invite.guild.id not in invite_cache:
         invite_cache[invite.guild.id] = {}
-    invite_cache[invite.guild.id][invite.code] = {"inviter": invite.inviter.id, "uses": invite.uses}
+    invite_cache[invite.guild.id][invite.code] = invite.uses
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute("INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
-                         (invite.code, invite.guild.id, invite.inviter.id, invite.uses, datetime.now(timezone.utc).isoformat()))
+        await db.execute(
+            "INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
+            (invite.code, invite.guild.id, invite.inviter.id, invite.uses, datetime.now(timezone.utc).isoformat())
+        )
         await db.commit()
 
 @bot.event
 async def on_invite_delete(invite):
+    """Track when an invite is deleted"""
     if invite.guild.id in invite_cache:
         invite_cache[invite.guild.id].pop(invite.code, None)
 
 @bot.event
 async def on_member_join(member):
+    """Track member joins and attribute to inviter"""
     if member.bot:
         return
+    
     guild = member.guild
+    
+    # Small delay to ensure invite cache is updated
+    await asyncio.sleep(0.5)
+    
     try:
-        current_invites = await guild.invites()
-        old_invites = invite_cache.get(guild.id, {})
-        for inv in current_invites:
-            old_inv = old_invites.get(inv.code, None)
-            if old_inv and inv.uses > old_inv['uses']:
-                inviter_id = inv.inviter.id
-                account_age = (datetime.now(timezone.utc) - member.created_at.replace(tzinfo=timezone.utc)).days
-                is_fake = account_age < 30
-                async with aiosqlite.connect("hakari.db") as db:
-                    if is_fake:
-                        await db.execute("UPDATE users SET invite_fake = invite_fake + 1 WHERE user_id = ?", (inviter_id,))
-                    else:
-                        await db.execute("UPDATE users SET invite_joins = invite_joins + 1, invite_count = invite_count + 1 WHERE user_id = ?", (inviter_id,))
-                    await db.execute("UPDATE invite_codes SET uses = ? WHERE code = ?", (inv.uses, inv.code))
-                    await db.commit()
-                old_invites[inv.code] = {"inviter": inviter_id, "uses": inv.uses}
-                break
-        invite_cache[guild.id] = old_invites
-    except:
-        pass
+        used_invite = await find_used_invite(guild)
+        
+        if used_invite and used_invite.inviter:
+            inviter_id = used_invite.inviter.id
+            
+            # Check if account is fake (less than 30 days old)
+            account_age = (datetime.now(timezone.utc) - member.created_at.replace(tzinfo=timezone.utc)).days
+            is_fake = account_age < 30
+            
+            # Check if this is a rejoin
+            async with aiosqlite.connect("hakari.db") as db:
+                # Check if user has joined before
+                async with db.execute(
+                    "SELECT 1 FROM users WHERE user_id = ? AND invite_joins > 0",
+                    (member.id,)
+                ) as cur:
+                    is_rejoin = await cur.fetchone() is not None
+                
+                if is_rejoin:
+                    # Track as rejoin (only if within 7 days)
+                    await db.execute(
+                        "UPDATE users SET invite_rejoins = invite_rejoins + 1 WHERE user_id = ?",
+                        (inviter_id,)
+                    )
+                elif is_fake:
+                    # Track as fake account
+                    await db.execute(
+                        "UPDATE users SET invite_fake = invite_fake + 1 WHERE user_id = ?",
+                        (inviter_id,)
+                    )
+                else:
+                    # Track as legitimate join
+                    await db.execute(
+                        "UPDATE users SET invite_joins = invite_joins + 1, invite_count = invite_count + 1 WHERE user_id = ?",
+                        (inviter_id,)
+                    )
+                
+                # Update invite code uses
+                await db.execute(
+                    "UPDATE invite_codes SET uses = ? WHERE code = ?",
+                    (used_invite.uses, used_invite.code)
+                )
+                
+                await db.commit()
+            
+            # Log the join
+            print(f"Member {member.name} joined using invite {used_invite.code} by {used_invite.inviter.name}")
+            
+            # Send welcome message with inviter info
+            try:
+                channel = guild.system_channel or guild.text_channels[0]
+                if channel and channel.permissions_for(guild.me).send_messages:
+                    embed = discord.Embed(
+                        title="👋 New Member Joined!",
+                        description=f"Welcome {member.mention} to **{guild.name}**!",
+                        color=0x2ecc71
+                    )
+                    embed.add_field(name="Invited by", value=f"{used_invite.inviter.mention}", inline=True)
+                    embed.add_field(name="Account Age", value=f"{account_age} days", inline=True)
+                    embed.add_field(name="Total Invites", value=f"{used_invite.uses} uses", inline=True)
+                    embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+                    embed.set_footer(text=f"Member #{guild.member_count}")
+                    await channel.send(embed=embed)
+            except:
+                pass
+        else:
+            # Couldn't determine which invite was used
+            print(f"Could not determine invite for {member.name} in {guild.name}")
+            
+    except Exception as e:
+        print(f"Error in member join handler: {e}")
+        await update_invite_cache(guild)
 
 @bot.event
 async def on_member_remove(member):
+    """Track member leaves"""
     if member.bot:
         return
+    
     guild = member.guild
+    
     try:
+        # Update the invite cache when someone leaves
         current_invites = await guild.invites()
-        old_invites = invite_cache.get(guild.id, {})
+        old_cache = invite_cache.get(guild.id, {})
+        
         for inv in current_invites:
-            old_inv = old_invites.get(inv.code, None)
-            if old_inv and inv.uses < old_inv.get('uses', 0):
-                inviter_id = old_inv['inviter']
+            old_uses = old_cache.get(inv.code)
+            if old_uses is not None and inv.uses < old_uses:
+                # This invite's use count decreased (someone left who used this invite)
+                inviter_id = None
+                
+                # Get the inviter from the database
                 async with aiosqlite.connect("hakari.db") as db:
-                    await db.execute("UPDATE users SET invite_left = invite_left + 1 WHERE user_id = ?", (inviter_id,))
-                    await db.commit()
-                old_invites[inv.code]['uses'] = inv.uses
+                    async with db.execute(
+                        "SELECT inviter_id FROM invite_codes WHERE code = ?",
+                        (inv.code,)
+                    ) as cur:
+                        row = await cur.fetchone()
+                        if row:
+                            inviter_id = row[0]
+                    
+                    if inviter_id:
+                        await db.execute(
+                            "UPDATE users SET invite_left = invite_left + 1 WHERE user_id = ?",
+                            (inviter_id,)
+                        )
+                        await db.commit()
+                
                 break
-        invite_cache[guild.id] = old_invites
-    except:
-        pass
+        
+        # Update cache
+        for inv in current_invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+            
+    except Exception as e:
+        print(f"Error in member leave handler: {e}")
+        await update_invite_cache(guild)
+
+@bot.event
+async def on_guild_join(guild):
+    """Cache invites when bot joins a new guild"""
+    await update_invite_cache(guild)
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)", (guild.id,))
+        await db.commit()
+    print(f"Joined new guild: {guild.name}")
+
+@bot.event
+async def on_guild_remove(guild):
+    """Clean up when bot leaves a guild"""
+    if guild.id in invite_cache:
+        del invite_cache[guild.id]
+    print(f"Left guild: {guild.name}")
 
 @bot.command(name="ci", aliases=["createinvite"])
 @economy_check()
 async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
+    """Create a permanent invite link"""
     try:
-        invite = await ctx.channel.create_invite(max_uses=max_uses, max_age=max_age, reason=f"Created by {ctx.author.name}")
+        invite = await ctx.channel.create_invite(
+            max_uses=max_uses if max_uses > 0 else 0,
+            max_age=max_age if max_age > 0 else 0,
+            reason=f"Created by {ctx.author.name}"
+        )
+        
+        # Update cache
         if ctx.guild.id not in invite_cache:
             invite_cache[ctx.guild.id] = {}
-        invite_cache[ctx.guild.id][invite.code] = {"inviter": ctx.author.id, "uses": 0}
+        invite_cache[ctx.guild.id][invite.code] = invite.uses
+        
+        # Save to database
         async with aiosqlite.connect("hakari.db") as db:
-            await db.execute("INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
-                             (invite.code, ctx.guild.id, ctx.author.id, 0, datetime.now(timezone.utc).isoformat()))
+            await db.execute(
+                "INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
+                (invite.code, ctx.guild.id, ctx.author.id, invite.uses, datetime.now(timezone.utc).isoformat())
+            )
             await db.commit()
+        
         embed = discord.Embed(title="📨 Invite Created", color=0x2ecc71)
-        embed.add_field(name="Link", value=f"https://discord.gg/{invite.code}", inline=False)
-        embed.add_field(name="Max Uses", value=str(max_uses) if max_uses > 0 else "Unlimited", inline=True)
-        embed.add_field(name="Expires", value=f"{max_age}s" if max_age > 0 else "Never", inline=True)
+        embed.add_field(name="🔗 Link", value=f"https://discord.gg/{invite.code}", inline=False)
+        embed.add_field(name="👤 Max Uses", value=str(max_uses) if max_uses > 0 else "Unlimited", inline=True)
+        embed.add_field(name="⏰ Expires", value=f"{max_age}s" if max_age > 0 else "Never", inline=True)
         embed.set_footer(text=f"Created by {ctx.author.name}")
         await ctx.send(embed=embed)
     except Exception as e:
@@ -522,6 +675,7 @@ async def invite_stats(ctx, user: discord.User = None):
     """Show invite statistics for a user with profile picture"""
     if user is None:
         user = ctx.author
+    
     data = await get_user(user.id)
     joins = data.get('invite_joins', 0)
     left = data.get('invite_left', 0)
@@ -529,16 +683,64 @@ async def invite_stats(ctx, user: discord.User = None):
     rejoins = data.get('invite_rejoins', 0)
     total = joins + left + fake + rejoins
     
+    # Get active invites created by this user
+    active_invites = 0
+    async with aiosqlite.connect("hakari.db") as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM invite_codes WHERE guild_id = ? AND inviter_id = ?",
+            (ctx.guild.id, user.id)
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                active_invites = row[0]
+    
     embed = discord.Embed(title="📊 Invite Log", color=0x3498db)
     embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
-    embed.description = f"> **{user.name}** has **{total}** invites"
+    embed.description = f"> **{user.name}** has **{total}** total invites tracked"
     embed.add_field(name="✅ Joins", value=str(joins), inline=True)
     embed.add_field(name="❌ Left", value=str(left), inline=True)
     embed.add_field(name="⚠️ Fake", value=str(fake), inline=True)
     embed.add_field(name="🔄 Rejoins (7d)", value=str(rejoins), inline=True)
+    embed.add_field(name="🔗 Active Invites", value=str(active_invites), inline=True)
+    embed.add_field(name="📈 Net Joins", value=str(joins - left), inline=True)
     embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
     embed.timestamp = datetime.now(timezone.utc)
     await ctx.send(embed=embed)
+
+@bot.command(name="invitetop", aliases=["itop"])
+@economy_check()
+async def invite_top(ctx):
+    """Show top inviters in the server"""
+    async with aiosqlite.connect("hakari.db") as db:
+        async with db.execute(
+            "SELECT user_id, invite_joins, invite_left, invite_fake, invite_rejoins FROM users WHERE invite_joins > 0 ORDER BY invite_joins DESC LIMIT 10"
+        ) as cur:
+            rows = await cur.fetchall()
+    
+    if not rows:
+        return await ctx.send("No invite data yet!")
+    
+    embed = discord.Embed(title=f"🏆 Top Inviters - {ctx.guild.name}", color=0xf1c40f)
+    
+    for i, (uid, joins, left, fake, rejoins) in enumerate(rows, 1):
+        user = ctx.guild.get_member(uid)
+        name = user.mention if user else f"<@{uid}>"
+        net = joins - left
+        embed.add_field(
+            name=f"{i}. {name}",
+            value=f"✅ {joins} joins | ❌ {left} left | ⚠️ {fake} fake | 🔄 {rejoins} rejoin\n📈 Net: **{net}**",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="inviterefresh", aliases=["irefresh"])
+@owner_only()
+async def invite_refresh(ctx):
+    """Force refresh the invite cache for this server"""
+    await update_invite_cache(ctx.guild)
+    invite_count = len(invite_cache.get(ctx.guild.id, {}))
+    await ctx.send(f"✅ Invite cache refreshed! Tracking **{invite_count}** active invites.")
 
 # ==================================================
 # STATS COMMAND
@@ -2861,9 +3063,9 @@ async def cmds_command(ctx):
             discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n`.mytickets` - Check your tickets\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
             discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="🏪 Shop", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View your shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop open/closed\n`.gm` - Global market", inline=False).add_field(name="🏢 Business", value="`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade business\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
             discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="💕 Relationships", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests\n`.topcouples` - Top couples", inline=False),
-            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (with PFP)\n`.ci [uses] [age]` - Create invite link\n`.glinv` - Invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• ✅ Joins\n• ❌ Left\n• ⚠️ Fake accounts\n• 🔄 Rejoins\n\nProfile picture included!", inline=False),
+            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (with PFP)\n`.ci [uses] [age]` - Create invite link\n`.itop` - Top inviters leaderboard\n`.glinv` - Global invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• ✅ Joins\n• ❌ Left\n• ⚠️ Fake accounts\n• 🔄 Rejoins\n• 🔗 Active invites\n• 📈 Net joins\n\nProfile picture included!", inline=False),
             discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n\n• Earn XP by chatting\n• Level up every 100 XP per level²\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges\n\nComplete quests for bonus coins!", inline=False),
-            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
+            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.itop` - Top server inviters\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
@@ -2881,7 +3083,7 @@ async def ccmds_command(ctx):
             discord.Embed(title="👑 Owner Commands - Money", color=0xe74c3c).add_field(name="💰 Money Management", value="`.addmoney @user <amount>` - Add money to user\n`.removemoney @user all/half/amount` - Remove money\n`.setmoney @user <amount>` - Set wallet balance\n`.addbank @user <amount>` - Add to bank\n`.removebank @user all/half/amount` - Remove from bank", inline=False).add_field(name="🔧 Utilities", value="`.avt @user` - Toggle tax exemption\n`.protect @user` - Protect from robs\n`.unprotect @user` - Remove protection\n`.sst @user` - Reset rob cooldown", inline=False),
             discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.rewardlasteveryone <amount> [count]` - Reward all servers\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
             discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward\n`.setlotteryjackpot <amount>` - Set lottery jackpot", inline=False),
-            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="🎟️ Lottery Management", value="`.forcedraw` - Force lottery draw\n`.setlotteryjackpot <amount>` - Set jackpot\n`.addinvites @user <amount>` - Add invites", inline=False),
+            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="🎟️ Lottery Management", value="`.forcedraw` - Force lottery draw\n`.setlotteryjackpot <amount>` - Set jackpot\n`.inviterefresh` - Refresh invite cache", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
@@ -3151,49 +3353,39 @@ async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
     if amt <= 0:
         return await ctx.send("Amount must be positive.")
     
-    # Collect all recent authors from all servers
     all_recent = {}
     now = datetime.now(timezone.utc)
-    
-    # Also check database for users who messaged within last 5 minutes
     cutoff_time = now - timedelta(minutes=5)
     
     async with aiosqlite.connect("hakari.db") as db:
-        # Get all users who have messaged within the last 5 minutes across all servers
         async with db.execute(
             "SELECT user_id FROM users WHERE last_message IS NOT NULL AND last_message > ?",
             (cutoff_time.isoformat(),)
         ) as cur:
             rows = await cur.fetchall()
         
-        # Also check the recent_message_authors cache
         for guild_id, dq in recent_message_authors.items():
             for uid in dq:
-                all_recent[uid] = now  # These are definitely recent
+                all_recent[uid] = now
     
-    # Combine: only reward users who are in the database AND have messaged recently
     eligible_users = []
     seen = set()
     
-    # First priority: users from the database who messaged recently
     for (uid,) in rows:
         if uid not in seen:
             eligible_users.append(uid)
             seen.add(uid)
     
-    # Second priority: users from the cache
     for uid in all_recent:
         if uid not in seen:
             eligible_users.append(uid)
             seen.add(uid)
     
-    # Take only the requested count
     eligible_users = eligible_users[:count]
     
     if not eligible_users:
         return await ctx.send("❌ No eligible users found! Users must have sent a message within the last 5 minutes on any server.")
     
-    # Reward them
     rewarded_count = 0
     async with aiosqlite.connect("hakari.db") as db:
         for uid in eligible_users:
@@ -3362,14 +3554,12 @@ async def announce(ctx, *, message: str):
     sent = 0
     for guild in bot.guilds:
         try:
-            # Find the most active text channel
             best_channel = None
             highest_messages = 0
             
             for channel in guild.text_channels:
                 if channel.permissions_for(guild.me).send_messages:
                     try:
-                        # Try to get recent message count as activity indicator
                         msg_count = 0
                         async for _ in channel.history(limit=50):
                             msg_count += 1
@@ -3377,7 +3567,6 @@ async def announce(ctx, *, message: str):
                             highest_messages = msg_count
                             best_channel = channel
                     except:
-                        # Fallback to system channel or first available
                         pass
             
             if not best_channel:
@@ -3562,8 +3751,9 @@ async def on_ready():
     loan_interest.start()
     bank_interest.start()
     lottery_draw.start()
+    print("Caching invites for all guilds...")
     await cache_invites()
-    print(f"{bot.user} ready.")
+    print(f"{bot.user} ready. Tracking invites across {len(bot.guilds)} servers.")
 
 @bot.event
 async def on_message(message):
