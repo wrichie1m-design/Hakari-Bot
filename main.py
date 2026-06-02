@@ -24,6 +24,7 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=
 gambling_cooldowns = {}
 recent_message_authors = {}
 active_wordle_games = {}
+invite_cache = {}
 
 # ==================================================
 # NUMBER FORMATTING
@@ -416,19 +417,141 @@ async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 # ==================================================
-# INVITE COMMANDS (DISCORD ACTUAL DATA)
+# INVITE TRACKING SYSTEM
 # ==================================================
+async def cache_invites():
+    for guild in bot.guilds:
+        try:
+            invites = await guild.invites()
+            invite_cache[guild.id] = {}
+            for inv in invites:
+                invite_cache[guild.id][inv.code] = inv.uses
+            print(f"Cached {len(invites)} invites for {guild.name}")
+        except Exception as e:
+            print(f"Failed to cache invites for {guild.name}: {e}")
+            invite_cache[guild.id] = {}
+
+async def update_invite_cache(guild):
+    try:
+        invites = await guild.invites()
+        if guild.id not in invite_cache:
+            invite_cache[guild.id] = {}
+        for inv in invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+    except:
+        pass
+
+async def find_used_invite(guild):
+    try:
+        new_invites = await guild.invites()
+        old_cache = invite_cache.get(guild.id, {})
+        used_invite = None
+        for inv in new_invites:
+            old_uses = old_cache.get(inv.code, 0)
+            if inv.uses > old_uses:
+                used_invite = inv
+                break
+        if guild.id not in invite_cache:
+            invite_cache[guild.id] = {}
+        for inv in new_invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+        return used_invite
+    except Exception as e:
+        print(f"Error finding used invite: {e}")
+        await update_invite_cache(guild)
+        return None
+
+@bot.event
+async def on_invite_create(invite):
+    if invite.guild.id not in invite_cache:
+        invite_cache[invite.guild.id] = {}
+    invite_cache[invite.guild.id][invite.code] = invite.uses
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
+            (invite.code, invite.guild.id, invite.inviter.id, invite.uses, datetime.now(timezone.utc).isoformat())
+        )
+        await db.commit()
+
+@bot.event
+async def on_invite_delete(invite):
+    if invite.guild.id in invite_cache:
+        invite_cache[invite.guild.id].pop(invite.code, None)
+
+@bot.event
+async def on_member_join(member):
+    if member.bot:
+        return
+    guild = member.guild
+    await asyncio.sleep(0.5)
+    try:
+        used_invite = await find_used_invite(guild)
+        if used_invite and used_invite.inviter:
+            inviter_id = used_invite.inviter.id
+            account_age = (datetime.now(timezone.utc) - member.created_at.replace(tzinfo=timezone.utc)).days
+            is_fake = account_age < 30
+            async with aiosqlite.connect("hakari.db") as db:
+                if is_fake:
+                    await db.execute("UPDATE users SET invite_fake = invite_fake + 1 WHERE user_id = ?", (inviter_id,))
+                else:
+                    await db.execute("UPDATE users SET invite_joins = invite_joins + 1, invite_count = invite_count + 1 WHERE user_id = ?", (inviter_id,))
+                await db.execute("UPDATE invite_codes SET uses = ? WHERE code = ?", (used_invite.uses, used_invite.code))
+                await db.commit()
+    except Exception as e:
+        print(f"Error in member join handler: {e}")
+        await update_invite_cache(guild)
+
+@bot.event
+async def on_member_remove(member):
+    if member.bot:
+        return
+    guild = member.guild
+    try:
+        current_invites = await guild.invites()
+        old_cache = invite_cache.get(guild.id, {})
+        for inv in current_invites:
+            old_uses = old_cache.get(inv.code)
+            if old_uses is not None and inv.uses < old_uses:
+                inviter_id = None
+                async with aiosqlite.connect("hakari.db") as db:
+                    async with db.execute("SELECT inviter_id FROM invite_codes WHERE code = ?", (inv.code,)) as cur:
+                        row = await cur.fetchone()
+                        if row:
+                            inviter_id = row[0]
+                    if inviter_id:
+                        await db.execute("UPDATE users SET invite_left = invite_left + 1 WHERE user_id = ?", (inviter_id,))
+                        await db.commit()
+                break
+        for inv in current_invites:
+            invite_cache[guild.id][inv.code] = inv.uses
+    except Exception as e:
+        print(f"Error in member leave handler: {e}")
+        await update_invite_cache(guild)
+
+@bot.event
+async def on_guild_join(guild):
+    await update_invite_cache(guild)
+    async with aiosqlite.connect("hakari.db") as db:
+        await db.execute("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)", (guild.id,))
+        await db.commit()
+
+@bot.event
+async def on_guild_remove(guild):
+    if guild.id in invite_cache:
+        del invite_cache[guild.id]
+
 @bot.command(name="ci", aliases=["createinvite"])
 @economy_check()
 async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
-    """Create a permanent invite link"""
     try:
-        invite = await ctx.channel.create_invite(
-            max_uses=max_uses if max_uses > 0 else 0,
-            max_age=max_age if max_age > 0 else 0,
-            reason=f"Created by {ctx.author.name}"
-        )
-        
+        invite = await ctx.channel.create_invite(max_uses=max_uses if max_uses > 0 else 0, max_age=max_age if max_age > 0 else 0, reason=f"Created by {ctx.author.name}")
+        if ctx.guild.id not in invite_cache:
+            invite_cache[ctx.guild.id] = {}
+        invite_cache[ctx.guild.id][invite.code] = invite.uses
+        async with aiosqlite.connect("hakari.db") as db:
+            await db.execute("INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
+                             (invite.code, ctx.guild.id, ctx.author.id, invite.uses, datetime.now(timezone.utc).isoformat()))
+            await db.commit()
         embed = discord.Embed(title="📨 Invite Created", color=0x2ecc71)
         embed.add_field(name="🔗 Link", value=f"https://discord.gg/{invite.code}", inline=False)
         embed.add_field(name="👤 Max Uses", value=str(max_uses) if max_uses > 0 else "Unlimited", inline=True)
@@ -441,124 +564,101 @@ async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
 @bot.command(name="i", aliases=["invites", "inv"])
 @economy_check()
 async def invite_stats(ctx, user: discord.User = None):
-    """Show actual Discord invite statistics for a user"""
     if user is None:
         user = ctx.author
-    
-    # Get Discord's actual invite data
-    total_uses = 0
-    active_invites = 0
-    invite_list = []
-    
-    try:
-        # Get all invites for this guild
-        all_invites = await ctx.guild.invites()
-        
-        # Filter invites created by this user
-        for inv in all_invites:
-            if inv.inviter and inv.inviter.id == user.id:
-                total_uses += inv.uses
-                active_invites += 1
-                invite_list.append({
-                    'code': inv.code,
-                    'uses': inv.uses,
-                    'channel': inv.channel.name if inv.channel else "Unknown",
-                    'created': inv.created_at.strftime("%b %d, %Y") if inv.created_at else "Unknown",
-                    'expires': "Never" if inv.max_age == 0 else f"{inv.max_age}s",
-                    'max_uses': "Unlimited" if inv.max_uses == 0 else str(inv.max_uses),
-                    'url': f"https://discord.gg/{inv.code}"
-                })
-    except Exception as e:
-        print(f"Error fetching invites: {e}")
-    
-    embed = discord.Embed(title="📊 Invite Stats", color=0x3498db)
-    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
-    
-    # Show Discord's actual invite counts
-    embed.description = f"> **{user.name}** has **{total_uses}** total invite uses across **{active_invites}** active invites"
-    
-    embed.add_field(name="🔗 Active Invites", value=f"{active_invites} invite(s)", inline=True)
-    embed.add_field(name="👥 Total Joins", value=f"{total_uses} members", inline=True)
-    embed.add_field(name="📊 Invite Score", value=f"{(total_uses * 100) + (active_invites * 50):,}", inline=True)
-    
-    # Show top invites
-    if invite_list:
-        # Sort by uses (highest first)
-        invite_list.sort(key=lambda x: x['uses'], reverse=True)
-        
-        invite_text = ""
-        for i, inv in enumerate(invite_list[:5], 1):
-            invite_text += f"**{i}.** `{inv['code']}` - **{inv['uses']}** uses\n"
-            invite_text += f"└ #{inv['channel']} • Created: {inv['created']}\n"
-        
-        if len(invite_list) > 5:
-            invite_text += f"\n*...and {len(invite_list) - 5} more invites*"
-        
-        embed.add_field(name="📨 Your Invites", value=invite_text or "No active invites", inline=False)
-    
-    embed.set_footer(text=f"Requested by {ctx.author.name} • Shows actual Discord invite data", 
-                    icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
+    data = await get_user(user.id)
+    joins = data.get('invite_joins', 0)
+    left = data.get('invite_left', 0)
+    fake = data.get('invite_fake', 0)
+    total = joins + fake
+    embed = discord.Embed(title="Invites", color=0x2b2d31)
+    embed.set_author(name=user.name, icon_url=user.avatar.url if user.avatar else user.default_avatar.url)
+    embed.add_field(name="🟢 Regular", value=f"`{joins}`", inline=True)
+    embed.add_field(name="🔴 Left", value=f"`{left}`", inline=True)
+    embed.add_field(name="🟡 Fake", value=f"`{fake}`", inline=True)
+    embed.add_field(name="📊 Total", value=f"`{total}`", inline=True)
+    embed.set_footer(text=f"Requested by {ctx.author.name}")
     embed.timestamp = datetime.now(timezone.utc)
     await ctx.send(embed=embed)
 
-
-@bot.command(name="invitetop", aliases=["itop"])
+@bot.command(name="lb", aliases=["leaderboard"])
 @economy_check()
-async def invite_top(ctx):
-    """Show top inviters in the server based on actual Discord invite uses"""
-    
-    # Get all invites and group by inviter
-    inviter_stats = {}
-    all_invites = []
-    
-    try:
-        all_invites = await ctx.guild.invites()
-        
-        for inv in all_invites:
-            if inv.inviter:
-                inviter_id = inv.inviter.id
-                if inviter_id not in inviter_stats:
-                    inviter_stats[inviter_id] = {
-                        'user': inv.inviter,
-                        'total_uses': 0,
-                        'active_invites': 0,
-                        'invites': []
-                    }
-                inviter_stats[inviter_id]['total_uses'] += inv.uses
-                inviter_stats[inviter_id]['active_invites'] += 1
-                inviter_stats[inviter_id]['invites'].append({
-                    'code': inv.code,
-                    'uses': inv.uses
-                })
-    except Exception as e:
-        print(f"Error getting invites: {e}")
-    
-    if not inviter_stats:
-        return await ctx.send("No invite data available!")
-    
-    # Sort by total uses (highest first)
-    sorted_inviters = sorted(inviter_stats.items(), key=lambda x: x[1]['total_uses'], reverse=True)
-    
-    embed = discord.Embed(title=f"🏆 Top Inviters - {ctx.guild.name}", color=0xf1c40f)
+async def leaderboard_cmd(ctx, category: str = "i"):
+    if category.lower() in ["i", "inv", "invites"]:
+        await invite_leaderboard(ctx)
+    elif category.lower() in ["money", "bal", "balance"]:
+        await server_money_leaderboard(ctx)
+    elif category.lower() in ["xp", "level", "levels"]:
+        await server_xp_leaderboard(ctx)
+    else:
+        await ctx.send("Usage: `.lb i` (invites), `.lb money` (money), `.lb xp` (xp)")
+
+async def invite_leaderboard(ctx):
+    async with aiosqlite.connect("hakari.db") as db:
+        async with db.execute(
+            "SELECT user_id, invite_joins, invite_left, invite_fake FROM users WHERE invite_joins > 0 OR invite_fake > 0 ORDER BY (invite_joins + invite_fake) DESC LIMIT 10"
+        ) as cur:
+            rows = await cur.fetchall()
+    if not rows:
+        return await ctx.send("No invite data yet!")
+    embed = discord.Embed(title="🏆 Invite Leaderboard", color=0x2b2d31)
     embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
-    
-    for i, (uid, stats) in enumerate(sorted_inviters[:10], 1):
-        user = stats['user']
-        total = stats['total_uses']
-        active = stats['active_invites']
-        
-        # Find best invite
-        best_invite = max(stats['invites'], key=lambda x: x['uses']) if stats['invites'] else None
-        best_info = f" | Best: `{best_invite['code']}` ({best_invite['uses']} uses)" if best_invite else ""
-        
-        embed.add_field(
-            name=f"{i}. {user.name}",
-            value=f"👥 **{total}** total joins | 🔗 **{active}** active invites{best_info}",
-            inline=False
-        )
-    
-    total_joins = sum(s['total_uses'] for s in inviter_stats.values())
-    embed.set_footer(text=f"Total server invites: {len(all_invites)} | Total tracked joins: {total_joins}")
+    description = ""
+    for i, (uid, joins, left, fake) in enumerate(rows, 1):
+        user = ctx.guild.get_member(uid)
+        if user:
+            total = joins + fake
+            description += f"`{i}` **{user.name}** • {total:,} invites\n"
+        else:
+            total = joins + fake
+            description += f"`{i}` **Unknown User** • {total:,} invites\n"
+    embed.description = description
+    embed.set_footer(text=f"Top 10 inviters in {ctx.guild.name}")
+    await ctx.send(embed=embed)
+
+async def server_money_leaderboard(ctx):
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    members = [m for m in ctx.guild.members if not m.bot]
+    data = []
+    for m in members:
+        ud = await get_user(m.id)
+        total = ud['money'] + ud['bank']
+        if total > 0:
+            data.append((m.id, m.display_name, total))
+    data.sort(key=lambda x: x[2], reverse=True)
+    data = data[:10]
+    if not data:
+        return await ctx.send("No money data yet!")
+    embed = discord.Embed(title="🏆 Money Leaderboard", color=0x2b2d31)
+    embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
+    description = ""
+    for i, (uid, name, total) in enumerate(data, 1):
+        description += f"`{i}` **{name}** • {format_number(total)} {emoji}\n"
+    embed.description = description
+    embed.set_footer(text=f"Top 10 richest in {ctx.guild.name}")
+    await ctx.send(embed=embed)
+
+async def server_xp_leaderboard(ctx):
+    async with aiosqlite.connect("hakari.db") as db:
+        data = []
+        for m in ctx.guild.members:
+            if not m.bot:
+                async with db.execute("SELECT total_xp FROM users WHERE user_id=?", (m.id,)) as cur:
+                    row = await cur.fetchone()
+                if row and row[0] > 0:
+                    data.append((m.id, m.display_name, row[0]))
+        data.sort(key=lambda x: x[2], reverse=True)
+        data = data[:10]
+    if not data:
+        return await ctx.send("No XP data yet!")
+    embed = discord.Embed(title="🏆 XP Leaderboard", color=0x2b2d31)
+    embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
+    description = ""
+    for i, (uid, name, xp) in enumerate(data, 1):
+        level = int((xp/100)**0.5)
+        description += f"`{i}` **{name}** • Level {level} ({format_number(xp)} XP)\n"
+    embed.description = description
+    embed.set_footer(text=f"Top 10 in {ctx.guild.name}")
     await ctx.send(embed=embed)
 
 # ==================================================
@@ -1069,7 +1169,7 @@ async def loaninfo(ctx):
         await ctx.send(f"Loan: {format_number(data['loan_amount'])}{emoji}")
 
 # ==================================================
-# GAMBLING COMMANDS (All games remain the same)
+# GAMBLING COMMANDS
 # ==================================================
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
@@ -2610,167 +2710,6 @@ async def pending(ctx):
     await ctx.send(msg)
 
 # ==================================================
-# LEADERBOARDS (paginated)
-# ==================================================
-@bot.command(name="globalleaderboard", aliases=["glb"])
-@economy_check()
-async def glb(ctx, category: str = "money"):
-    if category not in ("money","xp"): return await ctx.send("Usage: .glb money or .glb xp")
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    try:
-        async with aiosqlite.connect("hakari.db") as db:
-            if category=="money":
-                async with db.execute("SELECT user_id, money, bank FROM users") as cur:
-                    rows = await cur.fetchall()
-                leaderboard = [(uid, int(m), int(b), int(m)+int(b)) for uid,m,b in rows if int(m)+int(b)>0]
-                leaderboard.sort(key=lambda x: x[3], reverse=True)
-                all_entries = leaderboard; title = "🌍 Global Richest"
-            else:
-                async with db.execute("SELECT user_id, total_xp FROM users WHERE total_xp>0 ORDER BY total_xp DESC") as cur:
-                    rows = await cur.fetchall()
-                all_entries = [(uid, 0, 0, xp) for uid, xp in rows]; title = "🌍 Global Top XP"
-        if not all_entries: return await ctx.send("No data yet.")
-        per_page = 10
-        total_pages = max(1, (len(all_entries)+per_page-1)//per_page)
-        current_page = 1
-        async def build_embed(page):
-            start = (page-1)*per_page; end = start+per_page
-            page_entries = all_entries[start:end]
-            embed = discord.Embed(title=title, color=0x9b59b6)
-            desc = ""
-            for i, (uid, wallet, bank, total) in enumerate(page_entries, start+1):
-                try: user = await bot.fetch_user(uid); mention = user.mention
-                except: mention = f"<@{uid}>"
-                if category=="money":
-                    desc += f"**{i}.** {mention}, **{format_number(total)}{emoji}** ({format_number(wallet)}{emoji} wallet · {format_number(bank)}{emoji} bank)\n"
-                else:
-                    desc += f"**{i}.** {mention}, **{format_number(total)} XP**\n"
-            embed.description = desc
-            embed.set_footer(text=f"Page {page}/{total_pages} · {len(all_entries)} users")
-            return embed
-        embed = await build_embed(current_page)
-        if total_pages==1: return await ctx.send(embed=embed)
-        class LeaderboardView(discord.ui.View):
-            def __init__(self): super().__init__(timeout=120); self.current_page=1; self.message = None
-            @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
-            async def prev(self, inter, btn):
-                if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page = (self.current_page-1)%total_pages
-                if self.current_page==0: self.current_page=total_pages
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
-            async def nxt(self, inter, btn):
-                if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page = (self.current_page+1)%total_pages
-                if self.current_page==0: self.current_page=1
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            async def on_timeout(self):
-                try:
-                    for child in self.children: child.disabled=True
-                    if self.message:
-                        await self.message.edit(view=self)
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-        view = LeaderboardView()
-        msg = await ctx.send(embed=embed, view=view); view.message=msg
-    except Exception as e:
-        await ctx.send(f"Error loading leaderboard: {e}")
-
-@bot.command(name="serverleaderboard", aliases=["slb"])
-@economy_check()
-async def slb(ctx, category: str = "money"):
-    if category not in ("money","xp"): return await ctx.send("Usage: .slb money or .slb xp")
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    try:
-        members = [m for m in ctx.guild.members if not m.bot]
-        if category=="money":
-            data = []
-            for m in members:
-                ud = await get_user(m.id)
-                total = ud['money']+ud['bank']
-                if total>0: data.append((m.id, m.display_name, ud['money'], ud['bank'], total))
-            data.sort(key=lambda x: x[4], reverse=True); all_entries=data; title = f"📊 Server Richest – {ctx.guild.name}"
-        else:
-            async with aiosqlite.connect("hakari.db") as db:
-                data = []
-                for m in members:
-                    async with db.execute("SELECT total_xp FROM users WHERE user_id=?", (m.id,)) as cur:
-                        row = await cur.fetchone()
-                    if row and row[0]>0: data.append((m.id, m.display_name, 0, 0, row[0]))
-            data.sort(key=lambda x: x[4], reverse=True); all_entries=data; title = f"📊 Server Top XP – {ctx.guild.name}"
-        if not all_entries: return await ctx.send("No data yet.")
-        per_page=10; total_pages=max(1,(len(all_entries)+per_page-1)//per_page)
-        current_page=1
-        async def build_embed(page):
-            start=(page-1)*per_page; end=start+per_page
-            page_entries=all_entries[start:end]
-            embed = discord.Embed(title=title, color=0x9b59b6)
-            desc=""
-            for i,(uid,name,wallet,bank,total) in enumerate(page_entries, start+1):
-                if category=="money":
-                    desc += f"**{i}.** <@{uid}>, **{format_number(total)}{emoji}** ({format_number(wallet)}{emoji} wallet · {format_number(bank)}{emoji} bank)\n"
-                else:
-                    desc += f"**{i}.** <@{uid}>, **{format_number(total)} XP**\n"
-            embed.description=desc; embed.set_footer(text=f"Page {page}/{total_pages} · {len(all_entries)} users")
-            return embed
-        embed = await build_embed(current_page)
-        if total_pages==1: return await ctx.send(embed=embed)
-        class LeaderboardView(discord.ui.View):
-            def __init__(self): super().__init__(timeout=120); self.current_page=1; self.message = None
-            @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
-            async def prev(self, inter, btn):
-                if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page=(self.current_page-1)%total_pages
-                if self.current_page==0: self.current_page=total_pages
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
-            async def nxt(self, inter, btn):
-                if inter.user != ctx.author: return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page=(self.current_page+1)%total_pages
-                if self.current_page==0: self.current_page=1
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            async def on_timeout(self):
-                try:
-                    for child in self.children: child.disabled=True
-                    if self.message:
-                        await self.message.edit(view=self)
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-        view = LeaderboardView()
-        msg = await ctx.send(embed=embed, view=view); view.message=msg
-    except Exception as e:
-        await ctx.send(f"Error loading leaderboard: {e}")
-
-@bot.command(name="topcouples")
-@economy_check()
-async def top_couples(ctx):
-    async with aiosqlite.connect("hakari.db") as db:
-        async with db.execute("SELECT user_id, spouse_id, affection FROM users WHERE spouse_id IS NOT NULL ORDER BY affection DESC LIMIT 10") as cur:
-            rows = await cur.fetchall()
-    if not rows: return await ctx.send("No couples.")
-    embed = discord.Embed(title="Top Couples", color=0xe91e63)
-    for i, (uid, sid, aff) in enumerate(rows, 1):
-        try: u = await bot.fetch_user(uid); s = await bot.fetch_user(sid)
-        except: continue
-        embed.add_field(name=f"{i}. {u.display_name} & {s.display_name}", value=f"{format_number(aff)} affection", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command(name="level", aliases=["rank"])
-@economy_check()
-async def level(ctx):
-    data = await get_user(ctx.author.id)
-    lvl = data.get('level',0); xp = data.get('total_xp',0)
-    next_xp = ((lvl+1)**2)*100; needed = next_xp - xp
-    bar_len = min(20, int((xp - (lvl**2)*100)/(next_xp - (lvl**2)*100)*20)) if lvl>0 else min(20, int(xp/100*20))
-    bar = "█"*bar_len + "░"*(20-bar_len)
-    embed = discord.Embed(title=f"{ctx.author.display_name}", color=0x9b59b6)
-    embed.add_field(name="Level", value=lvl, inline=True)
-    embed.add_field(name="XP", value=f"{format_number(xp)} / {format_number(next_xp)}", inline=True)
-    embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
-    embed.set_footer(text=f"Needed: {format_number(needed)} XP")
-    await ctx.send(embed=embed)
-
-# ==================================================
 # INVITE REWARD COMMANDS
 # ==================================================
 @bot.command(name="pricepool", aliases=["pp"])
@@ -2882,9 +2821,9 @@ async def cmds_command(ctx):
             discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n`.mytickets` - Check your tickets\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
             discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="🏪 Shop", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View your shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop open/closed\n`.gm` - Global market", inline=False).add_field(name="🏢 Business", value="`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade business\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
             discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="💕 Relationships", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests\n`.topcouples` - Top couples", inline=False),
-            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (Discord data)\n`.ci [uses] [age]` - Create invite link\n`.itop` - Top inviters leaderboard\n`.glinv` - Global invite leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• 🔗 Active invites with codes\n• 👥 Total join count\n• 📊 Invite score\n• 📨 Individual invite details\n\nProfile picture included!", inline=False),
+            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (with PFP)\n`.ci [uses] [age]` - Create invite link\n`.lb i` - Invite leaderboard\n`.lb money` - Money leaderboard\n`.lb xp` - XP leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• 🟢 Regular joins\n• 🔴 Left\n• 🟡 Fake accounts\n• 📊 Total\n\nProfile picture included!", inline=False),
             discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n\n• Earn XP by chatting\n• Level up every 100 XP per level²\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges\n\nComplete quests for bonus coins!", inline=False),
-            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.slb money` - Server richest\n`.slb xp` - Server top XP\n`.glinv` - Invite leaderboard\n`.itop` - Top server inviters\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
+            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.lb i` - Invite leaderboard\n`.lb money` - Money leaderboard\n`.lb xp` - XP leaderboard\n`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
@@ -2964,9 +2903,7 @@ class HelpPaginator(discord.ui.View):
             if self.message:
                 await self.message.edit(view=self)
         except (discord.NotFound, discord.HTTPException):
-            pass
-
-class PageModal(discord.ui.Modal):
+            passclass PageModal(discord.ui.Modal):
     def __init__(self, paginator: HelpPaginator):
         super().__init__(title="Go to Page", timeout=60)
         self.paginator = paginator
@@ -3163,48 +3100,37 @@ async def reward_last(ctx, amount_str: str, count: int = 1):
 @bot.command(name="rewardlasteveryone", aliases=["rle"])
 @main_owner_only()
 async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
-    """Reward the last message authors across ALL servers (must have messaged within 5 minutes)"""
     try:
         amt = parse_amount(amount_str)
     except:
         return await ctx.send("Invalid amount.")
-    
     if amt <= 0:
         return await ctx.send("Amount must be positive.")
-    
     all_recent = {}
     now = datetime.now(timezone.utc)
     cutoff_time = now - timedelta(minutes=5)
-    
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute(
             "SELECT user_id FROM users WHERE last_message IS NOT NULL AND last_message > ?",
             (cutoff_time.isoformat(),)
         ) as cur:
             rows = await cur.fetchall()
-        
         for guild_id, dq in recent_message_authors.items():
             for uid in dq:
                 all_recent[uid] = now
-    
     eligible_users = []
     seen = set()
-    
     for (uid,) in rows:
         if uid not in seen:
             eligible_users.append(uid)
             seen.add(uid)
-    
     for uid in all_recent:
         if uid not in seen:
             eligible_users.append(uid)
             seen.add(uid)
-    
     eligible_users = eligible_users[:count]
-    
     if not eligible_users:
         return await ctx.send("❌ No eligible users found! Users must have sent a message within the last 5 minutes on any server.")
-    
     rewarded_count = 0
     async with aiosqlite.connect("hakari.db") as db:
         for uid in eligible_users:
@@ -3217,17 +3143,14 @@ async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
             except:
                 pass
         await db.commit()
-    
     emoji = "💰"
     mentions = ', '.join(f"<@{uid}>" for uid in eligible_users[:5])
     if len(eligible_users) > 5:
         mentions += f" and {len(eligible_users) - 5} more..."
-    
     embed = discord.Embed(title="🌍 Global Reward", color=0x2ecc71)
     embed.description = f"Rewarded **{rewarded_count}** recent chatters across all servers with **{format_number(amt)}{emoji}** each!"
     embed.add_field(name="Recipients", value=mentions, inline=False)
     embed.set_footer(text=f"Only users active within last 5 minutes were eligible")
-    
     await ctx.send(embed=embed)
     await log_action(ctx.author.id, "RewardLastEveryone", f"Rewarded {rewarded_count} users with {amt} each across all servers")
 
@@ -3375,7 +3298,6 @@ async def announce(ctx, *, message: str):
         try:
             best_channel = None
             highest_messages = 0
-            
             for channel in guild.text_channels:
                 if channel.permissions_for(guild.me).send_messages:
                     try:
@@ -3387,10 +3309,8 @@ async def announce(ctx, *, message: str):
                             best_channel = channel
                     except:
                         pass
-            
             if not best_channel:
                 best_channel = guild.system_channel or guild.text_channels[0]
-            
             if best_channel and best_channel.permissions_for(guild.me).send_messages:
                 embed = discord.Embed(description=message, color=0xf1c40f)
                 embed.set_author(name=f"{ctx.author.name} - Owner Of Bot", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
@@ -3399,7 +3319,6 @@ async def announce(ctx, *, message: str):
                 sent += 1
         except:
             pass
-    
     embed = discord.Embed(title="📢 Announcement Sent", color=0x2ecc71)
     embed.description = f"Message sent to **{sent}/{len(bot.guilds)}** servers"
     embed.add_field(name="Content", value=message[:1024] if len(message) > 1024 else message, inline=False)
@@ -3422,7 +3341,6 @@ async def servers_list(ctx):
             text_channels = len(guild.text_channels)
             voice_channels = len(guild.voice_channels)
             created_at = guild.created_at.strftime("%b %d, %Y")
-            
             guilds_info.append({
                 'guild': guild,
                 'name': guild.name,
@@ -3443,35 +3361,24 @@ async def servers_list(ctx):
                 'features': guild.features,
                 'vanity': guild.vanity_url_code,
             })
-        
         guilds_info.sort(key=lambda x: x['members'], reverse=True)
-        
         total_members = sum(g['members'] for g in guilds_info)
         total_humans = sum(g['humans'] for g in guilds_info)
         total_bots = sum(g['bots'] for g in guilds_info)
-        
         per_page = 5
         total_pages = max(1, (len(guilds_info) + per_page - 1) // per_page)
         current_page = 1
-        
         async def build_embed(page):
             start = (page - 1) * per_page
             end = start + per_page
             page_guilds = guilds_info[start:end]
-            
-            embed = discord.Embed(
-                title=f"🌐 Bot Servers ({len(bot.guilds)} total)",
-                color=0x3498db
-            )
-            
+            embed = discord.Embed(title=f"🌐 Bot Servers ({len(bot.guilds)} total)", color=0x3498db)
             embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else bot.user.default_avatar.url)
-            
             desc = ""
             for i, ginfo in enumerate(page_guilds, start + 1):
                 boost_emoji = {0: "⚪", 1: "🌱", 2: "🔮", 3: "👑"}.get(ginfo['boost_level'], "⚪")
                 verified = "✅" if "VERIFIED" in ginfo['features'] else ""
                 partnered = "🤝" if "PARTNERED" in ginfo['features'] else ""
-                
                 desc += f"**{i}.** `{ginfo['name']}`\n"
                 desc += f"👑 Owner: `{ginfo['owner']}`\n"
                 desc += f"👥 Members: **{ginfo['members']}** (👤 {ginfo['humans']} | 🤖 {ginfo['bots']})\n"
@@ -3484,41 +3391,21 @@ async def servers_list(ctx):
                 if ginfo['description'] != "No description":
                     desc += f"📝 {ginfo['description'][:100]}\n"
                 desc += "\n"
-            
             embed.description = desc
-            
-            embed.add_field(
-                name="📊 Summary",
-                value=f"**Servers:** {len(bot.guilds)}\n**Total Members:** {format_number(total_members)}\n**Humans:** {format_number(total_humans)}\n**Bots:** {format_number(total_bots)}\n**Avg Members:** {format_number(total_members // len(bot.guilds)) if bot.guilds else 0}",
-                inline=True
-            )
-            
+            embed.add_field(name="📊 Summary", value=f"**Servers:** {len(bot.guilds)}\n**Total Members:** {format_number(total_members)}\n**Humans:** {format_number(total_humans)}\n**Bots:** {format_number(total_bots)}\n**Avg Members:** {format_number(total_members // len(bot.guilds)) if bot.guilds else 0}", inline=True)
             if bot.shard_count:
-                embed.add_field(
-                    name="🔧 Shard Info",
-                    value=f"**Shards:** {bot.shard_count}\n**Latency:** {round(bot.latency * 1000)}ms",
-                    inline=True
-                )
-            
-            embed.set_footer(
-                text=f"Page {page}/{total_pages} • Sorted by members • {len(guilds_info)} servers",
-                icon_url=ctx.author.avatar.url if ctx.author.avatar else None
-            )
+                embed.add_field(name="🔧 Shard Info", value=f"**Shards:** {bot.shard_count}\n**Latency:** {round(bot.latency * 1000)}ms", inline=True)
+            embed.set_footer(text=f"Page {page}/{total_pages} • Sorted by members • {len(guilds_info)} servers", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
             embed.timestamp = datetime.now(timezone.utc)
-            
             return embed
-        
         embed = await build_embed(current_page)
-        
         if total_pages == 1:
             return await ctx.send(embed=embed)
-        
         class ServerLeaderboardView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=120)
                 self.current_page = 1
                 self.message = None
-            
             @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
             async def prev(self, inter: discord.Interaction, btn: discord.ui.Button):
                 if inter.user != ctx.author:
@@ -3527,14 +3414,12 @@ async def servers_list(ctx):
                 if self.current_page == 0:
                     self.current_page = total_pages
                 await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            
             @discord.ui.button(label="📄 Jump", style=discord.ButtonStyle.secondary)
             async def jump(self, inter: discord.Interaction, btn: discord.ui.Button):
                 if inter.user != ctx.author:
                     return await inter.response.send_message("Not your menu!", ephemeral=True)
                 modal = ServerPageModal(self, total_pages, build_embed, ctx)
                 await inter.response.send_modal(modal)
-            
             @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
             async def nxt(self, inter: discord.Interaction, btn: discord.ui.Button):
                 if inter.user != ctx.author:
@@ -3543,7 +3428,6 @@ async def servers_list(ctx):
                 if self.current_page == 0:
                     self.current_page = 1
                 await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            
             async def on_timeout(self):
                 try:
                     for child in self.children:
@@ -3552,11 +3436,9 @@ async def servers_list(ctx):
                         await self.message.edit(view=self)
                 except (discord.NotFound, discord.HTTPException):
                     pass
-        
         view = ServerLeaderboardView()
         msg = await ctx.send(embed=embed, view=view)
         view.message = msg
-        
     except Exception as e:
         await ctx.send(f"❌ Error loading server list: {e}")
         print(f"Server list error: {e}")
@@ -3570,7 +3452,9 @@ async def on_ready():
     loan_interest.start()
     bank_interest.start()
     lottery_draw.start()
-    print(f"{bot.user} ready.")
+    print("Caching invites for all guilds...")
+    await cache_invites()
+    print(f"{bot.user} ready. Tracking invites across {len(bot.guilds)} servers.")
 
 @bot.event
 async def on_message(message):
