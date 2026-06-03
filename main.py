@@ -14,6 +14,7 @@ import os
 MAIN_OWNER_ID = 1486785358162300969
 COMMAND_PREFIX = "."
 TOKEN = os.environ["TOKEN"]
+CUSTOM_CURRENCY_EMOJI_ID = 1508331993266524251  # Your custom coin emoji
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,6 +26,7 @@ gambling_cooldowns = {}
 recent_message_authors = {}
 active_wordle_games = {}
 invite_cache = {}
+custom_currency_emoji = None  # Will be set in on_ready
 
 # ==================================================
 # NUMBER FORMATTING
@@ -325,14 +327,20 @@ async def get_setting(gid, setting):
     async with aiosqlite.connect("hakari.db") as db:
         async with db.execute(f"SELECT {setting} FROM guild_settings WHERE guild_id=?", (gid,)) as cur:
             row = await cur.fetchone()
-        if row: return row[0]
+        if row: result = row[0]
+        else: result = None
     defaults = {"economy_enabled":1,"rob_enabled":1,"gambling_enabled":1,"daily_amount":1500,
                 "daily_messages_needed":10,"sleep_amount_min":2000,"sleep_amount_max":2500,
                 "work_amount_min":150,"work_amount_max":300,"crime_amount_min":200,"crime_amount_max":800,
                 "interest_rate":5,"max_withdraw":999999999,"loan_interest":10,"currency_emoji":"💰",
                 "invite_reward_amount":"50000000","invite_threshold":3,
                 "lottery_jackpot":"0","lottery_tickets_sold":0}
-    return defaults.get(setting,1)
+    if result is None:
+        result = defaults.get(setting, 1)
+    # Override default currency emoji with custom emoji if set and not changed by server
+    if setting == "currency_emoji" and result == "💰" and custom_currency_emoji:
+        return custom_currency_emoji
+    return result
 
 async def is_owner(uid): return (await db_fetchone("SELECT 1 FROM owners WHERE user_id=?", (uid,))) is not None
 async def is_main_owner(uid): row = await db_fetchone("SELECT is_main FROM owners WHERE user_id=?", (uid,)); return row and row[0]==1
@@ -2903,7 +2911,9 @@ class HelpPaginator(discord.ui.View):
             if self.message:
                 await self.message.edit(view=self)
         except (discord.NotFound, discord.HTTPException):
-            passclass PageModal(discord.ui.Modal):
+            pass
+
+class PageModal(discord.ui.Modal):
     def __init__(self, paginator: HelpPaginator):
         super().__init__(title="Go to Page", timeout=60)
         self.paginator = paginator
@@ -3448,12 +3458,20 @@ async def servers_list(ctx):
 # ==================================================
 @bot.event
 async def on_ready():
+    global custom_currency_emoji
     await init_db()
     loan_interest.start()
     bank_interest.start()
     lottery_draw.start()
     print("Caching invites for all guilds...")
     await cache_invites()
+    # Fetch custom currency emoji
+    emoji = bot.get_emoji(CUSTOM_CURRENCY_EMOJI_ID)
+    if emoji:
+        custom_currency_emoji = str(emoji)
+    else:
+        custom_currency_emoji = "💰"
+    print(f"Currency emoji set to: {custom_currency_emoji}")
     print(f"{bot.user} ready. Tracking invites across {len(bot.guilds)} servers.")
 
 @bot.event
