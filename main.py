@@ -14,7 +14,7 @@ import os
 MAIN_OWNER_ID = 1486785358162300969
 COMMAND_PREFIX = "."
 TOKEN = os.environ["TOKEN"]
-CUSTOM_CURRENCY_EMOJI_ID = 1508331993266524251  # Your custom coin emoji
+CUSTOM_CURRENCY_EMOJI_ID = 1508331993266524251
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,7 +26,7 @@ gambling_cooldowns = {}
 recent_message_authors = {}
 active_wordle_games = {}
 invite_cache = {}
-custom_currency_emoji = None  # Will be set in on_ready
+custom_currency_emoji = None
 
 # ==================================================
 # NUMBER FORMATTING
@@ -112,7 +112,7 @@ async def init_db():
             quest_data TEXT DEFAULT '{}', quest_last_reset TIMESTAMP,
             badges TEXT DEFAULT '[]', showcase_badges TEXT DEFAULT '[]',
             last_heist TIMESTAMP, lottery_tickets INTEGER DEFAULT 0, lottery_last_tickets TIMESTAMP,
-            gambling_won INTEGER DEFAULT 0, gambling_lost INTEGER DEFAULT 0,
+            gambling_won TEXT DEFAULT '0', gambling_lost TEXT DEFAULT '0',
             last_message TIMESTAMP
         )''')
         for col in ["security_until TIMESTAMP", "invite_count INTEGER DEFAULT 0",
@@ -121,7 +121,7 @@ async def init_db():
                      "quest_data TEXT DEFAULT '{}'", "quest_last_reset TIMESTAMP",
                      "badges TEXT DEFAULT '[]'", "showcase_badges TEXT DEFAULT '[]'",
                      "last_heist TIMESTAMP", "lottery_tickets INTEGER DEFAULT 0", "lottery_last_tickets TIMESTAMP",
-                     "gambling_won INTEGER DEFAULT 0", "gambling_lost INTEGER DEFAULT 0",
+                     "gambling_won TEXT DEFAULT '0'", "gambling_lost TEXT DEFAULT '0'",
                      "last_message TIMESTAMP"]:
             try:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col}")
@@ -257,8 +257,8 @@ async def get_user(uid):
             data['invite_left'] = int(data.get('invite_left',0))
             data['invite_fake'] = int(data.get('invite_fake',0))
             data['invite_rejoins'] = int(data.get('invite_rejoins',0))
-            data['gambling_won'] = int(data.get('gambling_won',0))
-            data['gambling_lost'] = int(data.get('gambling_lost',0))
+            data['gambling_won'] = int(data.get('gambling_won','0'))
+            data['gambling_lost'] = int(data.get('gambling_lost','0'))
             data['lottery_tickets'] = int(data.get('lottery_tickets',0))
             return data
         await db.execute("INSERT INTO users (user_id) VALUES (?)", (uid,))
@@ -274,8 +274,8 @@ async def get_user(uid):
             data2['invite_left'] = int(data2.get('invite_left',0))
             data2['invite_fake'] = int(data2.get('invite_fake',0))
             data2['invite_rejoins'] = int(data2.get('invite_rejoins',0))
-            data2['gambling_won'] = int(data2.get('gambling_won',0))
-            data2['gambling_lost'] = int(data2.get('gambling_lost',0))
+            data2['gambling_won'] = int(data2.get('gambling_won','0'))
+            data2['gambling_lost'] = int(data2.get('gambling_lost','0'))
             data2['lottery_tickets'] = int(data2.get('lottery_tickets',0))
             return data2
 
@@ -302,9 +302,23 @@ async def update_bank(uid, amount):
 async def update_gambling_stats(uid, won=0, lost=0):
     async with aiosqlite.connect("hakari.db") as db:
         if won:
-            await db.execute("UPDATE users SET gambling_won = gambling_won + ? WHERE user_id = ?", (won, uid))
+            async with db.execute("SELECT gambling_won FROM users WHERE user_id = ?", (uid,)) as cur:
+                row = await cur.fetchone()
+            try:
+                current = int(row[0]) if row and row[0] is not None else 0
+            except (OverflowError, ValueError, TypeError):
+                current = 0
+            new_value = max(0, current + won)
+            await db.execute("UPDATE users SET gambling_won = ? WHERE user_id = ?", (str(new_value), uid))
         if lost:
-            await db.execute("UPDATE users SET gambling_lost = gambling_lost + ? WHERE user_id = ?", (lost, uid))
+            async with db.execute("SELECT gambling_lost FROM users WHERE user_id = ?", (uid,)) as cur:
+                row = await cur.fetchone()
+            try:
+                current = int(row[0]) if row and row[0] is not None else 0
+            except (OverflowError, ValueError, TypeError):
+                current = 0
+            new_value = max(0, current + lost)
+            await db.execute("UPDATE users SET gambling_lost = ? WHERE user_id = ?", (str(new_value), uid))
         await db.commit()
 
 async def update_affection(uid, amount):
@@ -337,7 +351,6 @@ async def get_setting(gid, setting):
                 "lottery_jackpot":"0","lottery_tickets_sold":0}
     if result is None:
         result = defaults.get(setting, 1)
-    # Override default currency emoji with custom emoji if set and not changed by server
     if setting == "currency_emoji" and result == "💰" and custom_currency_emoji:
         return custom_currency_emoji
     return result
@@ -434,7 +447,6 @@ async def cache_invites():
             invite_cache[guild.id] = {}
             for inv in invites:
                 invite_cache[guild.id][inv.code] = inv.uses
-            print(f"Cached {len(invites)} invites for {guild.name}")
         except Exception as e:
             print(f"Failed to cache invites for {guild.name}: {e}")
             invite_cache[guild.id] = {}
@@ -3465,7 +3477,6 @@ async def on_ready():
     lottery_draw.start()
     print("Caching invites for all guilds...")
     await cache_invites()
-    # Fetch custom currency emoji
     emoji = bot.get_emoji(CUSTOM_CURRENCY_EMOJI_ID)
     if emoji:
         custom_currency_emoji = str(emoji)
