@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from collections import deque
 import os
+import time
 
 # ==================================================
 # BOT CONFIGURATION
@@ -27,6 +28,17 @@ recent_message_authors = {}
 active_wordle_games = {}
 invite_cache = {}
 custom_currency_emoji = None
+
+# Leaderboard cache
+leaderboard_cache = {
+    'global_money': {'data': [], 'timestamp': 0},
+    'global_xp': {'data': [], 'timestamp': 0},
+    'server_money': {},
+    'server_xp': {},
+    'server_invites': {},
+}
+
+CACHE_DURATION = 30  # seconds
 
 # ==================================================
 # NUMBER FORMATTING
@@ -127,6 +139,11 @@ async def init_db():
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col}")
             except:
                 pass
+        # Create indexes for faster queries
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_money ON users(money)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_bank ON users(bank)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_total_xp ON users(total_xp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_invite_joins ON users(invite_joins)")
         await db.execute('''CREATE TABLE IF NOT EXISTS invite_codes (
             code TEXT PRIMARY KEY,
             guild_id INTEGER,
@@ -168,7 +185,7 @@ async def init_db():
         for guild in bot.guilds:
             await db.execute("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)", (guild.id,))
         await db.commit()
-    print("Database ready.")
+    print("Database ready with optimized indexes.")
 
 # ==================================================
 # BACKGROUND TASKS
@@ -447,8 +464,7 @@ async def cache_invites():
             invite_cache[guild.id] = {}
             for inv in invites:
                 invite_cache[guild.id][inv.code] = inv.uses
-        except Exception as e:
-            print(f"Failed to cache invites for {guild.name}: {e}")
+        except:
             invite_cache[guild.id] = {}
 
 async def update_invite_cache(guild):
@@ -476,8 +492,7 @@ async def find_used_invite(guild):
         for inv in new_invites:
             invite_cache[guild.id][inv.code] = inv.uses
         return used_invite
-    except Exception as e:
-        print(f"Error finding used invite: {e}")
+    except:
         await update_invite_cache(guild)
         return None
 
@@ -487,10 +502,8 @@ async def on_invite_create(invite):
         invite_cache[invite.guild.id] = {}
     invite_cache[invite.guild.id][invite.code] = invite.uses
     async with aiosqlite.connect("hakari.db") as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
-            (invite.code, invite.guild.id, invite.inviter.id, invite.uses, datetime.now(timezone.utc).isoformat())
-        )
+        await db.execute("INSERT OR REPLACE INTO invite_codes (code, guild_id, inviter_id, uses, created_at) VALUES (?,?,?,?,?)",
+                         (invite.code, invite.guild.id, invite.inviter.id, invite.uses, datetime.now(timezone.utc).isoformat()))
         await db.commit()
 
 @bot.event
@@ -500,8 +513,7 @@ async def on_invite_delete(invite):
 
 @bot.event
 async def on_member_join(member):
-    if member.bot:
-        return
+    if member.bot: return
     guild = member.guild
     await asyncio.sleep(0.5)
     try:
@@ -517,14 +529,13 @@ async def on_member_join(member):
                     await db.execute("UPDATE users SET invite_joins = invite_joins + 1, invite_count = invite_count + 1 WHERE user_id = ?", (inviter_id,))
                 await db.execute("UPDATE invite_codes SET uses = ? WHERE code = ?", (used_invite.uses, used_invite.code))
                 await db.commit()
-    except Exception as e:
-        print(f"Error in member join handler: {e}")
+        leaderboard_cache['server_invites'].pop(guild.id, None)
+    except:
         await update_invite_cache(guild)
 
 @bot.event
 async def on_member_remove(member):
-    if member.bot:
-        return
+    if member.bot: return
     guild = member.guild
     try:
         current_invites = await guild.invites()
@@ -536,16 +547,15 @@ async def on_member_remove(member):
                 async with aiosqlite.connect("hakari.db") as db:
                     async with db.execute("SELECT inviter_id FROM invite_codes WHERE code = ?", (inv.code,)) as cur:
                         row = await cur.fetchone()
-                        if row:
-                            inviter_id = row[0]
+                        if row: inviter_id = row[0]
                     if inviter_id:
                         await db.execute("UPDATE users SET invite_left = invite_left + 1 WHERE user_id = ?", (inviter_id,))
                         await db.commit()
                 break
         for inv in current_invites:
             invite_cache[guild.id][inv.code] = inv.uses
-    except Exception as e:
-        print(f"Error in member leave handler: {e}")
+        leaderboard_cache['server_invites'].pop(guild.id, None)
+    except:
         await update_invite_cache(guild)
 
 @bot.event
@@ -601,6 +611,31 @@ async def invite_stats(ctx, user: discord.User = None):
     embed.timestamp = datetime.now(timezone.utc)
     await ctx.send(embed=embed)
 
+# ==================================================
+# OPTIMIZED LEADERBOARDS (with caching)
+# ==================================================
+def get_cached_data(cache_key, guild_id=None):
+    cache = leaderboard_cache
+    if guild_id is not None:
+        cache = cache.get(cache_key, {})
+        cached = cache.get(guild_id)
+        if cached and time.time() - cached['timestamp'] < CACHE_DURATION:
+            return cached['data']
+    else:
+        cached = cache.get(cache_key)
+        if cached and time.time() - cached['timestamp'] < CACHE_DURATION:
+            return cached['data']
+    return None
+
+def set_cached_data(cache_key, data, guild_id=None):
+    cache_entry = {'data': data, 'timestamp': time.time()}
+    if guild_id is not None:
+        if cache_key not in leaderboard_cache:
+            leaderboard_cache[cache_key] = {}
+        leaderboard_cache[cache_key][guild_id] = cache_entry
+    else:
+        leaderboard_cache[cache_key] = cache_entry
+
 @bot.command(name="lb", aliases=["leaderboard"])
 @economy_check()
 async def leaderboard_cmd(ctx, category: str = "i"):
@@ -614,13 +649,20 @@ async def leaderboard_cmd(ctx, category: str = "i"):
         await ctx.send("Usage: `.lb i` (invites), `.lb money` (money), `.lb xp` (xp)")
 
 async def invite_leaderboard(ctx):
-    async with aiosqlite.connect("hakari.db") as db:
-        async with db.execute(
-            "SELECT user_id, invite_joins, invite_left, invite_fake FROM users WHERE invite_joins > 0 OR invite_fake > 0 ORDER BY (invite_joins + invite_fake) DESC LIMIT 10"
-        ) as cur:
-            rows = await cur.fetchall()
+    cached = get_cached_data('server_invites', ctx.guild.id)
+    if cached is not None:
+        rows = cached
+    else:
+        async with aiosqlite.connect("hakari.db") as db:
+            async with db.execute(
+                "SELECT user_id, invite_joins, invite_left, invite_fake FROM users WHERE invite_joins > 0 OR invite_fake > 0 ORDER BY (invite_joins + invite_fake) DESC LIMIT 10"
+            ) as cur:
+                rows = await cur.fetchall()
+        set_cached_data('server_invites', rows, ctx.guild.id)
+    
     if not rows:
         return await ctx.send("No invite data yet!")
+    
     embed = discord.Embed(title="🏆 Invite Leaderboard", color=0x2b2d31)
     embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
     description = ""
@@ -637,18 +679,26 @@ async def invite_leaderboard(ctx):
     await ctx.send(embed=embed)
 
 async def server_money_leaderboard(ctx):
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    members = [m for m in ctx.guild.members if not m.bot]
-    data = []
-    for m in members:
-        ud = await get_user(m.id)
-        total = ud['money'] + ud['bank']
-        if total > 0:
-            data.append((m.id, m.display_name, total))
-    data.sort(key=lambda x: x[2], reverse=True)
-    data = data[:10]
+    cached = get_cached_data('server_money', ctx.guild.id)
+    if cached is not None:
+        data = cached
+    else:
+        member_ids = [m.id for m in ctx.guild.members if not m.bot]
+        data = []
+        async with aiosqlite.connect("hakari.db") as db:
+            placeholders = ','.join(['?'] * len(member_ids))
+            query = f"SELECT user_id, CAST(money AS INTEGER) + CAST(bank AS INTEGER) as total FROM users WHERE user_id IN ({placeholders}) AND CAST(money AS INTEGER) + CAST(bank AS INTEGER) > 0 ORDER BY total DESC LIMIT 10"
+            async with db.execute(query, member_ids) as cur:
+                rows = await cur.fetchall()
+            member_map = {m.id: m.display_name for m in ctx.guild.members}
+            for uid, total in rows:
+                data.append((uid, member_map.get(uid, "Unknown"), total))
+        set_cached_data('server_money', data, ctx.guild.id)
+    
     if not data:
         return await ctx.send("No money data yet!")
+    
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
     embed = discord.Embed(title="🏆 Money Leaderboard", color=0x2b2d31)
     embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
     description = ""
@@ -659,18 +709,25 @@ async def server_money_leaderboard(ctx):
     await ctx.send(embed=embed)
 
 async def server_xp_leaderboard(ctx):
-    async with aiosqlite.connect("hakari.db") as db:
+    cached = get_cached_data('server_xp', ctx.guild.id)
+    if cached is not None:
+        data = cached
+    else:
+        member_ids = [m.id for m in ctx.guild.members if not m.bot]
         data = []
-        for m in ctx.guild.members:
-            if not m.bot:
-                async with db.execute("SELECT total_xp FROM users WHERE user_id=?", (m.id,)) as cur:
-                    row = await cur.fetchone()
-                if row and row[0] > 0:
-                    data.append((m.id, m.display_name, row[0]))
-        data.sort(key=lambda x: x[2], reverse=True)
-        data = data[:10]
+        async with aiosqlite.connect("hakari.db") as db:
+            placeholders = ','.join(['?'] * len(member_ids))
+            query = f"SELECT user_id, total_xp FROM users WHERE user_id IN ({placeholders}) AND total_xp > 0 ORDER BY total_xp DESC LIMIT 10"
+            async with db.execute(query, member_ids) as cur:
+                rows = await cur.fetchall()
+            member_map = {m.id: m.display_name for m in ctx.guild.members}
+            for uid, xp in rows:
+                data.append((uid, member_map.get(uid, "Unknown"), xp))
+        set_cached_data('server_xp', data, ctx.guild.id)
+    
     if not data:
         return await ctx.send("No XP data yet!")
+    
     embed = discord.Embed(title="🏆 XP Leaderboard", color=0x2b2d31)
     embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
     description = ""
@@ -680,6 +737,98 @@ async def server_xp_leaderboard(ctx):
     embed.description = description
     embed.set_footer(text=f"Top 10 in {ctx.guild.name}")
     await ctx.send(embed=embed)
+
+@bot.command(name="globalleaderboard", aliases=["glb"])
+@economy_check()
+async def glb(ctx, category: str = "money"):
+    if category not in ("money","xp"): return await ctx.send("Usage: .glb money or .glb xp")
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    
+    cache_key = f'global_{category}'
+    cached = get_cached_data(cache_key)
+    
+    if cached is not None:
+        all_entries = cached
+    else:
+        async with aiosqlite.connect("hakari.db") as db:
+            if category == "money":
+                async with db.execute("SELECT user_id, CAST(money AS INTEGER) + CAST(bank AS INTEGER) as total FROM users WHERE CAST(money AS INTEGER) + CAST(bank AS INTEGER) > 0 ORDER BY total DESC LIMIT 50") as cur:
+                    rows = await cur.fetchall()
+                all_entries = [(uid, total) for uid, total in rows]
+            else:
+                async with db.execute("SELECT user_id, total_xp FROM users WHERE total_xp > 0 ORDER BY total_xp DESC LIMIT 50") as cur:
+                    rows = await cur.fetchall()
+                all_entries = [(uid, xp) for uid, xp in rows]
+        set_cached_data(cache_key, all_entries)
+    
+    if not all_entries:
+        return await ctx.send("No data yet.")
+    
+    title = "🌍 Global Richest" if category == "money" else "🌍 Global Top XP"
+    per_page = 10
+    total_pages = max(1, (len(all_entries) + per_page - 1) // per_page)
+    current_page = 1
+    
+    async def build_embed(page):
+        start = (page - 1) * per_page
+        end = start + per_page
+        page_entries = all_entries[start:end]
+        embed = discord.Embed(title=title, color=0x9b59b6)
+        desc = ""
+        for i, (uid, total) in enumerate(page_entries, start + 1):
+            try:
+                user = await bot.fetch_user(uid)
+                mention = user.mention
+            except:
+                mention = f"<@{uid}>"
+            if category == "money":
+                desc += f"**{i}.** {mention}, **{format_number(total)}{emoji}**\n"
+            else:
+                desc += f"**{i}.** {mention}, **{format_number(total)} XP**\n"
+        embed.description = desc
+        embed.set_footer(text=f"Page {page}/{total_pages} · {len(all_entries)} users")
+        return embed
+    
+    embed = await build_embed(current_page)
+    if total_pages == 1:
+        return await ctx.send(embed=embed)
+    
+    class LeaderboardView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.current_page = 1
+            self.message = None
+        
+        @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
+        async def prev(self, inter, btn):
+            if inter.user != ctx.author:
+                return await inter.response.send_message("Not your menu!", ephemeral=True)
+            self.current_page = (self.current_page - 1) % total_pages
+            if self.current_page == 0:
+                self.current_page = total_pages
+            await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
+        
+        @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
+        async def nxt(self, inter, btn):
+            if inter.user != ctx.author:
+                return await inter.response.send_message("Not your menu!", ephemeral=True)
+            self.current_page = (self.current_page + 1) % total_pages
+            if self.current_page == 0:
+                self.current_page = 1
+            await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
+        
+        async def on_timeout(self):
+            try:
+                for child in self.children:
+                    child.disabled = True
+                if self.message:
+                    await self.message.edit(view=self)
+            except:
+                pass
+    
+    view = LeaderboardView()
+    msg = await ctx.send(embed=embed, view=view)
+    view.message = msg
 
 # ==================================================
 # STATS COMMAND
