@@ -139,11 +139,6 @@ async def init_db():
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col}")
             except:
                 pass
-        # Create indexes for faster queries
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_money ON users(money)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_bank ON users(bank)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_total_xp ON users(total_xp)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_invite_joins ON users(invite_joins)")
         await db.execute('''CREATE TABLE IF NOT EXISTS invite_codes (
             code TEXT PRIMARY KEY,
             guild_id INTEGER,
@@ -185,7 +180,7 @@ async def init_db():
         for guild in bot.guilds:
             await db.execute("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)", (guild.id,))
         await db.commit()
-    print("Database ready with optimized indexes.")
+    print("Database ready.")
 
 # ==================================================
 # BACKGROUND TASKS
@@ -612,7 +607,7 @@ async def invite_stats(ctx, user: discord.User = None):
     await ctx.send(embed=embed)
 
 # ==================================================
-# OPTIMIZED LEADERBOARDS (with caching)
+# OPTIMIZED LEADERBOARDS (with caching, FIXED for large numbers)
 # ==================================================
 def get_cached_data(cache_key, guild_id=None):
     cache = leaderboard_cache
@@ -687,12 +682,16 @@ async def server_money_leaderboard(ctx):
         data = []
         async with aiosqlite.connect("hakari.db") as db:
             placeholders = ','.join(['?'] * len(member_ids))
-            query = f"SELECT user_id, CAST(money AS INTEGER) + CAST(bank AS INTEGER) as total FROM users WHERE user_id IN ({placeholders}) AND CAST(money AS INTEGER) + CAST(bank AS INTEGER) > 0 ORDER BY total DESC LIMIT 10"
+            query = f"SELECT user_id, money, bank FROM users WHERE user_id IN ({placeholders})"
             async with db.execute(query, member_ids) as cur:
                 rows = await cur.fetchall()
             member_map = {m.id: m.display_name for m in ctx.guild.members}
-            for uid, total in rows:
-                data.append((uid, member_map.get(uid, "Unknown"), total))
+            for uid, money_str, bank_str in rows:
+                total = int(money_str) + int(bank_str)
+                if total > 0:
+                    data.append((uid, member_map.get(uid, "Unknown"), total))
+        data.sort(key=lambda x: x[2], reverse=True)
+        data = data[:10]
         set_cached_data('server_money', data, ctx.guild.id)
     
     if not data:
@@ -752,9 +751,15 @@ async def glb(ctx, category: str = "money"):
     else:
         async with aiosqlite.connect("hakari.db") as db:
             if category == "money":
-                async with db.execute("SELECT user_id, CAST(money AS INTEGER) + CAST(bank AS INTEGER) as total FROM users WHERE CAST(money AS INTEGER) + CAST(bank AS INTEGER) > 0 ORDER BY total DESC LIMIT 50") as cur:
+                async with db.execute("SELECT user_id, money, bank FROM users") as cur:
                     rows = await cur.fetchall()
-                all_entries = [(uid, total) for uid, total in rows]
+                totals = []
+                for uid, money_str, bank_str in rows:
+                    total = int(money_str) + int(bank_str)
+                    if total > 0:
+                        totals.append((uid, total))
+                totals.sort(key=lambda x: x[1], reverse=True)
+                all_entries = totals[:50]
             else:
                 async with db.execute("SELECT user_id, total_xp FROM users WHERE total_xp > 0 ORDER BY total_xp DESC LIMIT 50") as cur:
                     rows = await cur.fetchall()
