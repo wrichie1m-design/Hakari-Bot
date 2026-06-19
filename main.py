@@ -98,6 +98,187 @@ def format_number(num: int) -> str:
     return str(num)
 
 # ==================================================
+# SWEAR FILTER (DISABLED – ALL WORDS ALLOWED)
+# ==================================================
+def contains_swear(word):
+    """Swear filter disabled - all words allowed"""
+    return False
+
+# ==================================================
+# EXTENDED WORD LIST FOR WORDLE
+# ==================================================
+# Original lists (unchanged)
+easy_words = ["apple","beach","bread","chair","cloud","dance","dream","earth","flame","fruit","ghost","grape","green","happy","heart","honey","house","juice","light","magic","mango","metal","money","music","ocean","piano","pizza","plant","queen","radio","river","robot","sheep","smile","snake","sound","space","spoon","stone","storm","sugar","sunny","table","tiger","toast","tower","train","truck","water","whale","world","young","zebra"]
+medium_words = ["adobe","agile","aisle","alley","amuse","arena","argue","armor","aroma","arrow","atlas","attic","badge","bagel","banjo","basil","berry","bison","black","blink","bloom","blush","booth","briar","brick","bride","broom","brown","brush","cabin","camel","cargo","carve","cedar","chain","charm","chess","chili","chime","cider","civic","clash","clerk","climb","cloak","clock","clown","cobra","comet","couch","crown","curve"]
+hard_words = ["aback","abyss","affix","axiom","azure","balmy","banal","bicep","bluff","boozy","cairn","crypt","cycle","dizzy","dwarf","eject","ennui","equip","exist","fjord","fluff","gauze","ghoul","gnash","gnome","guile","gypsy","haiku","hymen","ivied","jaunt","jazzy","jiffy","jumpy","khaki","llama","lymph","mauve","midge","nymph","ovoid","oxide","prawn","psyche","puffy","quack","quail","qualm","quart","queue","quill","quirk","quota","rabid"]
+
+# Additional words (including previously blocked words, slurs, swear words, etc.)
+ADDITIONAL_WORDS = [
+    # Common swears / slang
+    "fuck","shit","damn","bitch","ass","dick","cock","piss","cunt","bastard",
+    "slut","whore","douche","wank","twat","prick","bollocks","bugger",
+    "wanker","arse","crap","pussy","dildo","penis","vagina",
+    # More common words
+    "slave","slavery","overseer","overcome","overcoat","overload","overlook",
+    "overlord","overnight","overpower","overreact","overseas","oversee",
+    "oversight","overstate","overtake","overthrow","overtime","overturn",
+    "overview","overwork","overwrite","slab","slack","slain","slam","slang",
+    "slant","slap","slash","slate","slayer","sledge","sleek","sleepy",
+    "sleet","sleeve","slender","slice","slick","slid","slide","slight",
+    "slim","slimy","sling","slip","slit","sliver","slob","slogan","slop",
+    "slope","sloppy","slot","sloth","slouch","slough","slovenly","slow",
+    "sludge","slug","slum","slumber","slump","slung","slur","slush","sly",
+    "fuchsia","fudge","fuel","fugitive","fulcrum","fulfill","fumble",
+    "fume","function","fund","fungal","fungi","funnel","funny","fur",
+    "furious","furnace","furnish","furrow","further","fury","fuse",
+    "fusion","fuss","futile","future","fuzzy",
+    "overact","overage","overall","overarm","overawe","overbid","overbig",
+    "overbuy","overcame","overcast","overcook","overcool","overcrop",
+    "overdose","overdraw","overdub","overdue","overeat","overfed",
+    "overfeed","overfill","overfish","overflew","overflow","overfull",
+    "overgrew","overgrow","overhand","overhang","overhaul","overhead",
+    "overhear","overheat","overhung","overjoy","overkill","overlaid",
+    "overlain","overland","overlap","overlay","overleap","overlie",
+    "overload","overlong","overlook","overlord","overmuch","overnice",
+    "overpass","overpast","overpay","overplay","overplus","overrank",
+    "overrate","overrich","override","overripe","overrule","overrun",
+    "overseas","oversell","overset","oversew","overshoe","overshot",
+    "overside","oversize","overslip","overslow","oversold","oversoon",
+    "oversoul","overspin","overstay","overstep","overtake","overtalk",
+    "overtart","overtask","overtire","overtone","overtop","overtrade",
+    "overtrip","overturn","overurge","overview","overvote","overwarm",
+    "overweak","overwear","overween","overwind","overwing","overwise",
+    "overword","overwork","overworn","overzeal","ovule","ovum",
+    "fucker","motherfucker","fucking","shitty","asshole","dickhead",
+]
+
+# Build the combined valid word set (only 5-letter words from all sources)
+VALID_WORDS = set(easy_words + medium_words + hard_words)
+VALID_WORDS.update(w for w in ADDITIONAL_WORDS if len(w) == 5)
+
+GUESS_TIMEOUT = 300
+
+# ==================================================
+# WORDLE GAME (UPDATED – REAL WORD VALIDATION)
+# ==================================================
+class WordleGame:
+    def __init__(self, ctx, bet, difficulty):
+        self.ctx = ctx
+        self.bet = bet
+        self.difficulty = difficulty
+        if difficulty == "easy":
+            self.word = random.choice(easy_words)
+        elif difficulty == "hard":
+            self.word = random.choice(hard_words)
+        else:
+            self.word = random.choice(medium_words)
+        self.guesses_left = 5
+        self.won = False
+        self.message = None
+
+    def get_multiplier(self):
+        if self.difficulty == "easy": return 1.5
+        elif self.difficulty == "hard": return 3.5
+        else: return 2.0
+
+    def guess_feedback(self, guess):
+        feedback = []
+        word_letters = list(self.word)
+        for i, (g, w) in enumerate(zip(guess, self.word)):
+            if g == w:
+                feedback.append("🟩")
+                word_letters[i] = None
+            else:
+                feedback.append("⬛")
+        for i, (g, fb) in enumerate(zip(guess, feedback)):
+            if fb == "⬛" and g in word_letters:
+                feedback[i] = "🟨"
+                word_letters[word_letters.index(g)] = None
+        return "".join(feedback)
+
+    async def start(self):
+        emoji = await get_setting(self.ctx.guild.id, "currency_emoji")
+        embed = discord.Embed(title="🔤 Wordle Betting", color=0x9b59b6)
+        embed.add_field(name="Difficulty", value=self.difficulty.capitalize(), inline=True)
+        embed.add_field(name="Bet", value=f"{format_number(self.bet)} {emoji}", inline=True)
+        embed.add_field(name="Multiplier", value=f"{self.get_multiplier()}x", inline=True)
+        embed.add_field(name="Guesses", value="5", inline=False)
+        embed.set_footer(text="Type your 5-letter guess in chat. Must be a real English word. 5 minute timeout!")
+        self.message = await self.ctx.send(embed=embed)
+
+    async def guess(self, guess: str):
+        if len(guess) != 5 or not guess.isalpha():
+            await self.ctx.send("❌ Guess must be a 5-letter word.", delete_after=5)
+            return None
+        guess = guess.lower()
+        # Check if guess is a valid word from our dictionary
+        if guess not in VALID_WORDS:
+            await self.ctx.send("❌ Not a valid word.", delete_after=5)
+            return None
+        feedback = self.guess_feedback(guess)
+        self.guesses_left -= 1
+        embed = self.message.embeds[0]
+        current_field = embed.fields[3] if len(embed.fields) > 3 else None
+        if current_field:
+            previous = current_field.value
+        else:
+            previous = ""
+        new_line = f"{guess.upper()} {feedback}\n"
+        if len(embed.fields) >= 4:
+            embed.set_field_at(3, name="Guesses", value=previous + new_line, inline=False)
+        else:
+            embed.add_field(name="Guesses", value=new_line, inline=False)
+        embed.set_field_at(2, name="Guesses Left", value=str(self.guesses_left), inline=True)
+        await self.message.edit(embed=embed)
+        if guess == self.word:
+            self.won = True
+            return True
+        if self.guesses_left == 0:
+            return False
+        return None
+
+@bot.command(name="wordle")
+@economy_check()
+@gambling_cooldown_check()
+async def wordle(ctx, amount_str: str, difficulty: str = "medium"):
+    if difficulty not in ["easy", "medium", "hard"]:
+        return await ctx.send("Difficulty must be easy, medium, or hard.")
+    amount, err = await get_bet_amount(ctx, amount_str)
+    if err: return await ctx.send(err)
+    await update_money(ctx.author.id, -amount)
+    game = WordleGame(ctx, amount, difficulty)
+    await game.start()
+    emoji = await get_setting(ctx.guild.id, "currency_emoji")
+    active_wordle_games[ctx.author.id] = game
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+    while True:
+        try:
+            msg = await bot.wait_for("message", timeout=GUESS_TIMEOUT, check=check)
+        except asyncio.TimeoutError:
+            await update_gambling_stats(ctx.author.id, lost=amount)
+            await ctx.send(f"⏰ 5 minute timeout! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
+            break
+        if msg.content.lower().startswith("."):
+            continue
+        result = await game.guess(msg.content)
+        if result is True:
+            mult = game.get_multiplier()
+            win_amount = int(amount * mult)
+            await update_money(ctx.author.id, win_amount)
+            profit = win_amount - amount
+            await update_gambling_stats(ctx.author.id, won=profit)
+            await ctx.send(f"🎉 Correct! The word was **{game.word}**. You won {format_number(profit)}{emoji} (x{mult})!")
+            await update_quest_progress(ctx.author.id, "gamble_win")
+            break
+        elif result is False:
+            await update_gambling_stats(ctx.author.id, lost=amount)
+            await ctx.send(f"❌ Out of guesses! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
+            break
+    active_wordle_games.pop(ctx.author.id, None)
+    await set_gambling_cooldown(ctx.author.id)
+
+# ==================================================
 # DATABASE SETUP
 # ==================================================
 async def init_db():
@@ -607,7 +788,7 @@ async def invite_stats(ctx, user: discord.User = None):
     await ctx.send(embed=embed)
 
 # ==================================================
-# OPTIMIZED LEADERBOARDS (with caching, FIXED for large numbers)
+# OPTIMIZED LEADERBOARDS (with caching)
 # ==================================================
 def get_cached_data(cache_key, guild_id=None):
     cache = leaderboard_cache
@@ -1814,7 +1995,9 @@ async def tower(ctx, amount_str: str):
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
 
-# Roulette
+# ==================================================
+# MORE GAMBLING COMMANDS (Roulette, HighLow, Dice, etc.)
+# ==================================================
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1851,7 +2034,6 @@ async def roulette(ctx, amount_str: str, *, bet: str):
         await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# HighLow
 @bot.command(name="highlow", aliases=["hl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1887,7 +2069,6 @@ async def highlow(ctx, amount_str: str, choice: str):
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n❌ You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# Dice
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
 @gambling_cooldown_check()
@@ -1910,7 +2091,6 @@ async def dice(ctx, amount_str: str, guess: int):
         await ctx.send(f"🎲 You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# HorseRace
 @bot.command(name="horserace", aliases=["hrace"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2086,121 +2266,6 @@ async def plinko(ctx, amount_str: str, risk: str = "medium", rows: int = 12):
         await msg.edit(content=f"{msg.content}\n{result_text}")
     except:
         await ctx.send(result_text)
-    await set_gambling_cooldown(ctx.author.id)
-
-# Wordle
-easy_words = ["apple","beach","bread","chair","cloud","dance","dream","earth","flame","fruit","ghost","grape","green","happy","heart","honey","house","juice","light","magic","mango","metal","money","music","ocean","piano","pizza","plant","queen","radio","river","robot","sheep","smile","snake","sound","space","spoon","stone","storm","sugar","sunny","table","tiger","toast","tower","train","truck","water","whale","world","young","zebra"]
-medium_words = ["adobe","agile","aisle","alley","amuse","arena","argue","armor","aroma","arrow","atlas","attic","badge","bagel","banjo","basil","berry","bison","black","blink","bloom","blush","booth","briar","brick","bride","broom","brown","brush","cabin","camel","cargo","carve","cedar","chain","charm","chess","chili","chime","cider","civic","clash","clerk","climb","cloak","clock","clown","cobra","comet","couch","crown","curve"]
-hard_words = ["aback","abyss","affix","axiom","azure","balmy","banal","bicep","bluff","boozy","cairn","crypt","cycle","dizzy","dwarf","eject","ennui","equip","exist","fjord","fluff","gauze","ghoul","gnash","gnome","guile","gypsy","haiku","hymen","ivied","jaunt","jazzy","jiffy","jumpy","khaki","llama","lymph","mauve","midge","nymph","ovoid","oxide","prawn","psyche","puffy","quack","quail","qualm","quart","queue","quill","quirk","quota","rabid"]
-GUESS_TIMEOUT = 300
-
-class WordleGame:
-    def __init__(self, ctx, bet, difficulty):
-        self.ctx = ctx
-        self.bet = bet
-        self.difficulty = difficulty
-        if difficulty == "easy":
-            self.word = random.choice(easy_words)
-        elif difficulty == "hard":
-            self.word = random.choice(hard_words)
-        else:
-            self.word = random.choice(medium_words)
-        self.guesses_left = 5
-        self.won = False
-        self.message = None
-    def get_multiplier(self):
-        if self.difficulty == "easy": return 1.5
-        elif self.difficulty == "hard": return 3.5
-        else: return 2.0
-    def guess_feedback(self, guess):
-        feedback = []
-        word_letters = list(self.word)
-        for i, (g, w) in enumerate(zip(guess, self.word)):
-            if g == w:
-                feedback.append("🟩")
-                word_letters[i] = None
-            else:
-                feedback.append("⬛")
-        for i, (g, fb) in enumerate(zip(guess, feedback)):
-            if fb == "⬛" and g in word_letters:
-                feedback[i] = "🟨"
-                word_letters[word_letters.index(g)] = None
-        return "".join(feedback)
-    async def start(self):
-        emoji = await get_setting(self.ctx.guild.id, "currency_emoji")
-        embed = discord.Embed(title="🔤 Wordle Betting", color=0x9b59b6)
-        embed.add_field(name="Difficulty", value=self.difficulty.capitalize(), inline=True)
-        embed.add_field(name="Bet", value=f"{format_number(self.bet)} {emoji}", inline=True)
-        embed.add_field(name="Multiplier", value=f"{self.get_multiplier()}x", inline=True)
-        embed.add_field(name="Guesses", value="5", inline=False)
-        embed.set_footer(text="Type your 5-letter guess in chat. 5 minute timeout!")
-        self.message = await self.ctx.send(embed=embed)
-    async def guess(self, guess: str):
-        if len(guess) != 5 or not guess.isalpha():
-            await self.ctx.send("❌ Guess must be a 5-letter word.", delete_after=5)
-            return False
-        guess = guess.lower()
-        feedback = self.guess_feedback(guess)
-        self.guesses_left -= 1
-        embed = self.message.embeds[0]
-        current_field = embed.fields[3] if len(embed.fields) > 3 else None
-        if current_field:
-            previous = current_field.value
-        else:
-            previous = ""
-        new_line = f"{guess.upper()} {feedback}\n"
-        if len(embed.fields) >= 4:
-            embed.set_field_at(3, name="Guesses", value=previous + new_line, inline=False)
-        else:
-            embed.add_field(name="Guesses", value=new_line, inline=False)
-        embed.set_field_at(2, name="Guesses Left", value=str(self.guesses_left), inline=True)
-        await self.message.edit(embed=embed)
-        if guess == self.word:
-            self.won = True
-            return True
-        if self.guesses_left == 0:
-            return False
-        return None
-
-@bot.command(name="wordle")
-@economy_check()
-@gambling_cooldown_check()
-async def wordle(ctx, amount_str: str, difficulty: str = "medium"):
-    if difficulty not in ["easy", "medium", "hard"]:
-        return await ctx.send("Difficulty must be easy, medium, or hard.")
-    amount, err = await get_bet_amount(ctx, amount_str)
-    if err: return await ctx.send(err)
-    await update_money(ctx.author.id, -amount)
-    game = WordleGame(ctx, amount, difficulty)
-    await game.start()
-    emoji = await get_setting(ctx.guild.id, "currency_emoji")
-    active_wordle_games[ctx.author.id] = game
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-    while True:
-        try:
-            msg = await bot.wait_for("message", timeout=GUESS_TIMEOUT, check=check)
-        except asyncio.TimeoutError:
-            await update_gambling_stats(ctx.author.id, lost=amount)
-            await ctx.send(f"⏰ 5 minute timeout! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
-            break
-        if msg.content.lower().startswith("."):
-            continue
-        result = await game.guess(msg.content)
-        if result is True:
-            mult = game.get_multiplier()
-            win_amount = int(amount * mult)
-            await update_money(ctx.author.id, win_amount)
-            profit = win_amount - amount
-            await update_gambling_stats(ctx.author.id, won=profit)
-            await ctx.send(f"🎉 Correct! The word was **{game.word}**. You won {format_number(profit)}{emoji} (x{mult})!")
-            await update_quest_progress(ctx.author.id, "gamble_win")
-            break
-        elif result is False:
-            await update_gambling_stats(ctx.author.id, lost=amount)
-            await ctx.send(f"❌ Out of guesses! The word was **{game.word}**. You lost {format_number(amount)}{emoji}.")
-            break
-    active_wordle_games.pop(ctx.author.id, None)
     await set_gambling_cooldown(ctx.author.id)
 
 # Baccarat
