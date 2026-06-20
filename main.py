@@ -27,6 +27,7 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=
 gambling_cooldowns = {}
 recent_message_authors = {}
 active_wordle_games = {}
+active_hbt_games = {}
 invite_cache = {}
 custom_currency_emoji = None
 
@@ -401,7 +402,7 @@ async def set_gambling_cooldown(uid, seconds=3):
     gambling_cooldowns[uid] = datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 # ==================================================
-# EXTENDED WORD LIST FOR WORDLE
+# WORD LISTS
 # ==================================================
 easy_words = ["apple","beach","bread","chair","cloud","dance","dream","earth","flame","fruit","ghost","grape","green","happy","heart","honey","house","juice","light","magic","mango","metal","money","music","ocean","piano","pizza","plant","queen","radio","river","robot","sheep","smile","snake","sound","space","spoon","stone","storm","sugar","sunny","table","tiger","toast","tower","train","truck","water","whale","world","young","zebra"]
 medium_words = ["adobe","agile","aisle","alley","amuse","arena","argue","armor","aroma","arrow","atlas","attic","badge","bagel","banjo","basil","berry","bison","black","blink","bloom","blush","booth","briar","brick","bride","broom","brown","brush","cabin","camel","cargo","carve","cedar","chain","charm","chess","chili","chime","cider","civic","clash","clerk","climb","cloak","clock","clown","cobra","comet","couch","crown","curve"]
@@ -448,6 +449,90 @@ VALID_WORDS = set(easy_words + medium_words + hard_words)
 VALID_WORDS.update(w for w in ADDITIONAL_WORDS if len(w) == 5)
 
 GUESS_TIMEOUT = 300
+
+# ==================================================
+# HBT (HARDER BLACKTEA) WORD LISTS
+# ==================================================
+HBT_WORDS = set([
+    # 3-letter words
+    "hat","cat","bat","rat","sat","mat","pat","fat","vat","eat",
+    "bet","get","jet","let","met","net","pet","set","vet","wet",
+    "yet","bit","fit","hit","kit","lit","pit","sit","wit","zit",
+    "cot","dot","got","hot","jot","lot","not","pot","rot","sot",
+    "tot","but","cut","gut","hut","jut","nut","put","rut","tut",
+    "ace","age","ale","ape","are","ate","axe","bad","bag","ban",
+    "bar","bed","bee","beg","bow","box","boy","bud","bug","bun",
+    "bus","buy","cab","cam","can","cap","car","cop","cow","cry",
+    "cub","cup","cur","dad","dam","day","den","dew","did","dig",
+    "dim","dip","dog","dry","dub","dud","due","dug","dye","ear",
+    "egg","ego","elm","end","era","eve","ewe","eye","fan","far",
+    "fax","fed","fee","few","fig","fin","fir","fix","fly","foe",
+    "fog","for","fox","fry","fun","fur","gag","gap","gas","gay",
+    "gem","gig","gin","gum","gun","gut","guy","gym","had","ham",
+    "has","hay","hem","hen","hew","hid","him","hip","his","hog",
+    "hop","how","hub","hue","hug","hum","icy","ill","imp","ink",
+    "inn","ion","ire","irk","ivy","jab","jag","jam","jar","jaw",
+    "jay","job","jog","joy","jug","keg","key","kid","kin","kip",
+    "lab","lad","lag","lap","law","lay","led","leg","lid","lie",
+    "lip","log","low","lug","mad","man","map","mar","maw","may",
+    "men","mew","mid","mix","mob","mod","mom","mop","mow","mud",
+    "mug","mum","nab","nag","nap","new","nil","nip","nod","nor",
+    "now","nun","oak","oar","oat","odd","ode","off","oft","oil",
+    "old","ore","our","out","owe","owl","own","pad","pal","pan",
+    "pap","par","paw","pay","pea","peg","pen","pep","per","pie",
+    "pig","pin","ply","pod","pop","pro","pry","pub","pug","pun",
+    "pup","pus","rag","ram","ran","rap","raw","ray","red","ref",
+    "rep","rib","rid","rig","rim","rip","rob","rod","row","rub",
+    "rug","rum","run","rut","rye","sac","sad","sag","sap","saw",
+    "say","sea","see","sew","she","shy","sin","sip","sir","ski",
+    "sky","sly","sob","sod","son","sop","sow","soy","spa","spy",
+    "sty","sub","sue","sum","sun","sup","tab","tad","tag","tan",
+    "tap","tar","tax","tea","ted","tee","the","thy","tic","tie",
+    "tin","tip","toe","ton","too","top","tow","toy","try","tub",
+    "tug","two","urn","use","van","vat","vex","via","vie","vim",
+    "vow","wad","wag","war","was","wax","way","web","wed","wig",
+    "win","wit","woe","wok","won","woo","wow","yak","yam","yap",
+    "yaw","yea","yes","yew","yin","you","zap","zed","zen","zip","zoo",
+    # Swears
+    "ass","crap","damn","dick","fuck","shit","piss","cock","cunt",
+    "bitch","slut","wank","twat","arse","douche",
+])
+
+# Common letter combinations for HBT
+HBT_LETTER_COMBOS = [
+    "hat","bet","cot","dot","eat","fit","got","hit","jet","kit",
+    "lit","met","net","pot","rat","set","tin","vet","wet","yet",
+    "bat","cat","fat","gut","hut","jut","nut","pit","sat","tit",
+    "ace","age","ale","ape","are","ate","bad","bag","ban","bar",
+    "bed","big","bit","bow","box","boy","bud","bug","bun","bus",
+    "cab","can","cap","car","cop","cow","cry","cub","cup","dad",
+    "dam","day","den","did","dig","dim","dip","dog","dry","dub",
+    "ear","egg","end","era","eve","eye","fan","far","fed","few",
+    "fig","fin","fix","fly","foe","fog","for","fox","fry","fun",
+    "fur","gag","gap","gas","gem","gin","gum","gun","gut","gym",
+    "had","ham","has","hem","hen","hid","him","hip","his","hog",
+    "hop","how","hub","hug","hum","ice","ill","imp","ink","inn",
+    "ion","ivy","jab","jam","jar","jaw","jet","job","jog","joy",
+    "jug","keg","key","kid","kin","lab","lad","lag","lap","law",
+    "lay","led","leg","lid","lie","lip","log","lot","low","lug",
+    "mad","man","map","may","men","mix","mob","mop","mud","mug",
+    "nab","nag","nap","net","new","nil","nip","nod","nor","now",
+    "oak","oar","oat","odd","off","oil","old","ore","our","out",
+    "owe","owl","own","pad","pal","pan","paw","pay","pea","peg",
+    "pen","pet","pie","pig","pin","pod","pop","pot","pro","pub",
+    "pug","pun","pup","rag","ram","ran","rap","raw","ray","red",
+    "ref","rib","rid","rig","rim","rip","rob","rod","rot","row",
+    "rub","rug","rum","run","rut","sad","sag","sap","saw","say",
+    "sea","see","sew","she","shy","sin","sip","sir","ski","sky",
+    "sly","sob","sod","son","sow","soy","spa","spy","sty","sub",
+    "sue","sum","sun","sup","tab","tad","tag","tan","tap","tar",
+    "tax","tea","the","thy","tic","tie","tin","tip","toe","ton",
+    "top","tow","toy","try","tub","tug","two","urn","use","van",
+    "vat","vex","via","vie","vim","vow","wad","wag","war","was",
+    "wax","way","web","wed","wig","win","wit","woe","won","woo",
+    "wow","yak","yam","yap","yaw","yea","yes","yew","you","zap",
+    "zed","zen","zip","zoo",
+]
 
 # ==================================================
 # WORDLE GAME CLASS
@@ -522,6 +607,190 @@ class WordleGame:
         if self.guesses_left == 0:
             return False
         return None
+
+# ==================================================
+# HBT GAME CLASS
+# ==================================================
+class HBTGame:
+    def __init__(self, ctx, bet, difficulty="medium"):
+        self.ctx = ctx
+        self.bet = bet
+        self.difficulty = difficulty
+        self.letters = self.generate_letters()
+        self.found_words = set()
+        self.time_left = 120
+        self.active = True
+        self.message = None
+        self.task = None
+        self.start_time = datetime.now(timezone.utc)
+        
+        if difficulty == "easy":
+            self.target_words = 5
+            self.multiplier = 1.5
+        elif difficulty == "hard":
+            self.target_words = 15
+            self.multiplier = 3.5
+        else:
+            self.target_words = 10
+            self.multiplier = 2.0
+    
+    def generate_letters(self):
+        combo = random.choice(HBT_LETTER_COMBOS)
+        return combo.upper()
+    
+    def get_valid_words(self):
+        letters = self.letters.lower()
+        valid = []
+        for word in HBT_WORDS:
+            if len(word) >= 3 and all(word.count(c) <= letters.count(c) for c in word):
+                valid.append(word)
+        return valid
+    
+    def is_valid_word(self, word):
+        word = word.lower()
+        letters = self.letters.lower()
+        if len(word) < 3:
+            return False
+        if not all(word.count(c) <= letters.count(c) for c in word):
+            return False
+        return word in HBT_WORDS
+    
+    async def start(self):
+        emoji = await get_setting(self.ctx.guild.id, "currency_emoji")
+        valid_words = self.get_valid_words()
+        
+        embed = discord.Embed(title="🔤 Harder Blacktea (HBT)", color=0x9b59b6)
+        embed.add_field(name="Letters", value=f"**`{self.letters}`**", inline=False)
+        embed.add_field(name="Difficulty", value=self.difficulty.capitalize(), inline=True)
+        embed.add_field(name="Bet", value=f"{format_number(self.bet)} {emoji}", inline=True)
+        embed.add_field(name="Multiplier", value=f"{self.multiplier}x", inline=True)
+        embed.add_field(name="Target", value=f"Find {self.target_words} words", inline=True)
+        embed.add_field(name="Possible Words", value=f"`{len(valid_words)}` words can be made", inline=True)
+        embed.add_field(name="Time", value="2 minutes", inline=True)
+        embed.add_field(name="How to Play", 
+                       value="Type words using the given letters\n"
+                             "• Words must be 3+ letters\n"
+                             "• Each letter can be used multiple times\n"
+                             "• No duplicate words\n"
+                             "• `.endhbt` to end early and claim", inline=False)
+        embed.set_footer(text=f"Started by {self.ctx.author.display_name} | 2 minute timer")
+        
+        self.message = await self.ctx.send(embed=embed)
+        self.task = asyncio.create_task(self.timer())
+    
+    async def timer(self):
+        await asyncio.sleep(120)
+        if self.active:
+            await self.end_game(timed_out=True)
+    
+    async def add_word(self, word):
+        word = word.lower()
+        if word in self.found_words:
+            return "duplicate"
+        if not self.is_valid_word(word):
+            return "invalid"
+        
+        self.found_words.add(word)
+        
+        embed = self.message.embeds[0]
+        words_found = len(self.found_words)
+        
+        found_text = ", ".join(sorted(self.found_words))
+        if len(found_text) > 1024:
+            found_text = found_text[:1021] + "..."
+        
+        field_found = False
+        for i, field in enumerate(embed.fields):
+            if field.name.startswith("Words Found"):
+                embed.set_field_at(i, name=f"Words Found ({words_found})", value=found_text or "None yet", inline=False)
+                field_found = True
+                break
+        
+        if not field_found:
+            embed.add_field(name=f"Words Found ({words_found})", value=found_text or "None yet", inline=False)
+        
+        embed.set_field_at(1, name="Progress", value=f"{words_found}/{self.target_words}", inline=True)
+        
+        await self.message.edit(embed=embed)
+        
+        if words_found >= self.target_words:
+            await self.end_game(won=True)
+            return "won"
+        
+        return "valid"
+    
+    async def end_game(self, won=False, timed_out=False):
+        if not self.active:
+            return
+        self.active = False
+        
+        if self.task and not self.task.done():
+            self.task.cancel()
+        
+        emoji = await get_setting(self.ctx.guild.id, "currency_emoji")
+        words_found = len(self.found_words)
+        
+        if won:
+            win_amount = int(self.bet * self.multiplier)
+            await update_money(self.ctx.author.id, win_amount)
+            profit = win_amount - self.bet
+            await update_gambling_stats(self.ctx.author.id, won=profit)
+            
+            embed = discord.Embed(title="🎉 HBT Complete!", color=0x2ecc71)
+            embed.add_field(name="Result", value=f"You found {words_found} words and won!", inline=False)
+            embed.add_field(name="Winnings", value=f"{format_number(profit)}{emoji} ({self.multiplier}x)", inline=True)
+            embed.add_field(name="Words", value=", ".join(sorted(self.found_words)) or "None", inline=False)
+            await update_quest_progress(self.ctx.author.id, "gamble_win")
+        elif timed_out:
+            if words_found > 0:
+                payout_mult = 0.1 * words_found
+                win_amount = int(self.bet * payout_mult)
+                await update_money(self.ctx.author.id, win_amount)
+                profit = win_amount - self.bet
+                if profit > 0:
+                    await update_gambling_stats(self.ctx.author.id, won=profit)
+                else:
+                    await update_gambling_stats(self.ctx.author.id, lost=abs(profit))
+                
+                embed = discord.Embed(title="⏰ Time's Up - HBT", color=0xe67e22)
+                embed.add_field(name="Result", value=f"Time ran out! Found {words_found}/{self.target_words} words.", inline=False)
+                embed.add_field(name="Partial Payout", value=f"{format_number(win_amount)}{emoji} ({payout_mult:.1f}x)", inline=True)
+            else:
+                await update_gambling_stats(self.ctx.author.id, lost=self.bet)
+                embed = discord.Embed(title="⏰ Time's Up - HBT", color=0xe74c3c)
+                embed.add_field(name="Result", value="No words found! You lost your bet.", inline=False)
+                embed.add_field(name="Lost", value=f"{format_number(self.bet)}{emoji}", inline=True)
+            
+            embed.add_field(name="Words", value=", ".join(sorted(self.found_words)) or "None", inline=False)
+        else:
+            if words_found > 0:
+                payout_mult = 0.08 * words_found
+                win_amount = int(self.bet * payout_mult)
+                await update_money(self.ctx.author.id, win_amount)
+                profit = win_amount - self.bet
+                if profit > 0:
+                    await update_gambling_stats(self.ctx.author.id, won=profit)
+                
+                embed = discord.Embed(title="🏁 HBT Ended Early", color=0x3498db)
+                embed.add_field(name="Result", value=f"You ended with {words_found} words.", inline=False)
+                embed.add_field(name="Payout", value=f"{format_number(win_amount)}{emoji} ({payout_mult:.1f}x)", inline=True)
+            else:
+                await update_gambling_stats(self.ctx.author.id, lost=self.bet)
+                embed = discord.Embed(title="🏁 HBT Ended Early", color=0xe74c3c)
+                embed.add_field(name="Result", value="No words found! You lost your bet.", inline=False)
+                embed.add_field(name="Lost", value=f"{format_number(self.bet)}{emoji}", inline=True)
+            
+            embed.add_field(name="Words", value=", ".join(sorted(self.found_words)) or "None", inline=False)
+        
+        embed.add_field(name="Letters", value=f"**`{self.letters}`**", inline=False)
+        embed.set_footer(text=f"Played by {self.ctx.author.display_name}")
+        
+        try:
+            await self.message.edit(embed=embed)
+        except:
+            await self.ctx.send(embed=embed)
+        
+        await set_gambling_cooldown(self.ctx.author.id, 5)
 
 # ==================================================
 # BACKGROUND TASKS
@@ -1378,8 +1647,9 @@ async def resolve_user_id(target: str) -> int:
     except ValueError: return None
 
 # ==================================================
-# COMMAND: Wordle
+# ALL COMMANDS
 # ==================================================
+
 @bot.command(name="wordle")
 @economy_check()
 @gambling_cooldown_check()
@@ -1421,9 +1691,72 @@ async def wordle(ctx, amount_str: str, difficulty: str = "medium"):
     active_wordle_games.pop(ctx.author.id, None)
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Create Invite
-# ==================================================
+# HBT COMMANDS
+@bot.command(name="hbt", aliases=["harderblacktea", "blacktea"])
+@economy_check()
+@gambling_cooldown_check()
+async def hbt(ctx, amount_str: str, difficulty: str = "medium"):
+    """Harder Blacktea - Build words from given letters"""
+    if difficulty not in ["easy", "medium", "hard"]:
+        return await ctx.send("Difficulty must be easy, medium, or hard.")
+    
+    if ctx.author.id in active_hbt_games:
+        return await ctx.send("You already have an active HBT game! Use `.endhbt` to end it.")
+    
+    amount, err = await get_bet_amount(ctx, amount_str)
+    if err:
+        return await ctx.send(err)
+    
+    await update_money(ctx.author.id, -amount)
+    
+    game = HBTGame(ctx, amount, difficulty)
+    await game.start()
+    active_hbt_games[ctx.author.id] = game
+
+@bot.command(name="endhbt", aliases=["stophbt", "hbtend"])
+async def end_hbt(ctx):
+    """End your active HBT game early"""
+    if ctx.author.id not in active_hbt_games:
+        return await ctx.send("You don't have an active HBT game!")
+    
+    game = active_hbt_games[ctx.author.id]
+    if game.ctx.author.id != ctx.author.id:
+        return await ctx.send("This isn't your HBT game!")
+    
+    await game.end_game()
+    active_hbt_games.pop(ctx.author.id, None)
+    await ctx.send("🏁 HBT game ended!", delete_after=3)
+
+async def on_hbt_message(message):
+    """Listen for HBT word guesses"""
+    if message.author.bot:
+        return
+    if message.author.id not in active_hbt_games:
+        return
+    
+    game = active_hbt_games[message.author.id]
+    if not game.active:
+        return
+    
+    if message.channel.id != game.ctx.channel.id:
+        return
+    
+    if message.content.startswith("."):
+        return
+    
+    word = message.content.strip().split()[0]
+    result = await game.add_word(word)
+    
+    if result == "won":
+        await message.add_reaction("🎉")
+        active_hbt_games.pop(message.author.id, None)
+    elif result == "valid":
+        await message.add_reaction("✅")
+    elif result == "duplicate":
+        await message.add_reaction("🔄")
+    elif result == "invalid":
+        await message.add_reaction("❌")
+
 @bot.command(name="ci", aliases=["createinvite"])
 @economy_check()
 async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
@@ -1445,9 +1778,6 @@ async def create_invite(ctx, max_uses: int = 0, max_age: int = 0):
     except Exception as e:
         await ctx.send(f"❌ Failed to create invite: {e}")
 
-# ==================================================
-# COMMAND: Invite Stats
-# ==================================================
 @bot.command(name="i", aliases=["invites", "inv"])
 @economy_check()
 async def invite_stats(ctx, user: discord.User = None):
@@ -1468,9 +1798,6 @@ async def invite_stats(ctx, user: discord.User = None):
     embed.timestamp = datetime.now(timezone.utc)
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Leaderboard
-# ==================================================
 @bot.command(name="lb", aliases=["leaderboard"])
 @economy_check()
 async def leaderboard_cmd(ctx, category: str = "i"):
@@ -1577,9 +1904,6 @@ async def server_xp_leaderboard(ctx):
     embed.set_footer(text=f"Top 10 in {ctx.guild.name}")
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Global Leaderboard
-# ==================================================
 @bot.command(name="globalleaderboard", aliases=["glb"])
 @economy_check()
 async def glb(ctx, category: str = "money"):
@@ -1678,9 +2002,6 @@ async def glb(ctx, category: str = "money"):
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
 
-# ==================================================
-# COMMAND: Stats
-# ==================================================
 @bot.command(name="stats")
 @economy_check()
 async def stats_cmd(ctx):
@@ -1695,9 +2016,6 @@ async def stats_cmd(ctx):
     embed.add_field(name="📈 Net Profit", value=f"{format_number(net)} {emoji}", inline=True)
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Tasks/Quests
-# ==================================================
 @bot.command(name="tasks")
 @economy_check()
 async def tasks_cmd(ctx):
@@ -1706,9 +2024,6 @@ async def tasks_cmd(ctx):
     embed = view.build_embed()
     await ctx.send(embed=embed, view=view)
 
-# ==================================================
-# COMMAND: Badges
-# ==================================================
 @bot.command(name="badges")
 @economy_check()
 async def badges_cmd(ctx):
@@ -1737,9 +2052,6 @@ async def badge_select(ctx, badge1: str = None, badge2: str = None, badge3: str 
         await db.commit()
     await ctx.send(f"Showcase badges set: {', '.join(selected)}" if selected else "Showcase cleared.")
 
-# ==================================================
-# COMMAND: Balance
-# ==================================================
 @bot.command(name="bal", aliases=["balance"])
 @economy_check()
 async def balance(ctx, user: discord.User = None):
@@ -1755,9 +2067,6 @@ async def balance(ctx, user: discord.User = None):
         embed.add_field(name="Loan", value=f"{format_number(data['loan_amount'])} {emoji} (10%/hr)", inline=False)
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Deposit
-# ==================================================
 @bot.command(name="dep", aliases=["deposit"])
 @economy_check()
 async def deposit(ctx, amount_str: str):
@@ -1768,9 +2077,6 @@ async def deposit(ctx, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Deposited {format_number(amount)}{emoji} into your bank.")
 
-# ==================================================
-# COMMAND: Withdraw
-# ==================================================
 @bot.command(name="with", aliases=["withdraw"])
 @economy_check()
 async def withdraw(ctx, amount_str: str):
@@ -1798,9 +2104,6 @@ async def withdraw(ctx, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Withdrew {format_number(amount)}{emoji} from your bank.")
 
-# ==================================================
-# COMMAND: Daily
-# ==================================================
 @bot.command(name="daily")
 @economy_check()
 async def daily(ctx):
@@ -1823,9 +2126,6 @@ async def daily(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Daily claimed! +{format_number(reward)}{emoji}")
 
-# ==================================================
-# COMMAND: Work
-# ==================================================
 @bot.command(name="work")
 @economy_check()
 async def work(ctx):
@@ -1848,9 +2148,6 @@ async def work(ctx):
     await ctx.send(f"Work complete! +{format_number(reward)}{emoji}")
     await update_quest_progress(ctx.author.id, "work")
 
-# ==================================================
-# COMMAND: Sleep
-# ==================================================
 @bot.command(name="sleep")
 @economy_check()
 async def sleep(ctx):
@@ -1871,9 +2168,6 @@ async def sleep(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Sleep well! +{format_number(reward)}{emoji}")
 
-# ==================================================
-# COMMAND: Crime
-# ==================================================
 @bot.command(name="crime")
 @economy_check()
 async def crime(ctx):
@@ -1903,9 +2197,6 @@ async def crime(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Crime successful! +{format_number(reward)}{emoji}")
 
-# ==================================================
-# COMMAND: Rob
-# ==================================================
 @bot.command(name="rob")
 @economy_check()
 async def rob(ctx, user: discord.User):
@@ -1950,9 +2241,6 @@ async def rob(ctx, user: discord.User):
     await ctx.send(f"🤑 You stole **{format_number(stolen)}{emoji}** ({steal_pct_display}% of their wallet) from {user.mention}!")
     await update_quest_progress(ctx.author.id, "rob")
 
-# ==================================================
-# COMMAND: Interest
-# ==================================================
 @bot.command(name="interest")
 @economy_check()
 async def interest(ctx):
@@ -1960,9 +2248,6 @@ async def interest(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Bank interest rate: {rate}% per 24h on balances up to 50,000{emoji}.")
 
-# ==================================================
-# COMMAND: Security
-# ==================================================
 @bot.command(name="security")
 @economy_check()
 async def security(ctx, hours: int):
@@ -1980,9 +2265,6 @@ async def security(ctx, hours: int):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"🔒 Security activated for {hours} hours. Cost: {format_number(cost)}{emoji}")
 
-# ==================================================
-# COMMAND: Pay
-# ==================================================
 @bot.command(name="pay")
 @economy_check()
 async def pay(ctx, user: discord.User, amount_str: str):
@@ -1996,9 +2278,6 @@ async def pay(ctx, user: discord.User, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Paid {format_number(amount)}{emoji} to {user.mention}.")
 
-# ==================================================
-# COMMAND: Loan
-# ==================================================
 @bot.command(name="loan")
 @economy_check()
 async def loan(ctx, amount_str: str):
@@ -2022,9 +2301,6 @@ async def loan(ctx, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Loan of {format_number(amount)}{emoji} granted. 10% interest per hour until repaid.")
 
-# ==================================================
-# COMMAND: Repay
-# ==================================================
 @bot.command(name="repay")
 @economy_check()
 async def repay(ctx, amount_str: str):
@@ -2057,9 +2333,6 @@ async def repay(ctx, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Repaid {format_number(amount)}{emoji}. Remaining loan: {format_number(new_loan)}{emoji}" if new_loan > 0 else f"Loan fully repaid! 🎉")
 
-# ==================================================
-# COMMAND: Loan Info
-# ==================================================
 @bot.command(name="loaninfo")
 @economy_check()
 async def loaninfo(ctx):
@@ -2078,9 +2351,6 @@ async def loaninfo(ctx):
     else:
         await ctx.send(f"Loan: {format_number(data['loan_amount'])}{emoji}")
 
-# ==================================================
-# COMMAND: Coinflip
-# ==================================================
 @bot.command(name="cf", aliases=["coinflip"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2104,9 +2374,6 @@ async def coinflip(ctx, amount_str: str, choice: str = None):
         await ctx.send(f"Coin landed on **{result}**! You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Slots
-# ==================================================
 @bot.command(name="slots")
 @economy_check()
 @gambling_cooldown_check()
@@ -2140,9 +2407,6 @@ async def slots(ctx, amount_str: str):
         await ctx.send(f"🎰 `{r[0]} {r[1]} {r[2]}`\nLost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Blackjack
-# ==================================================
 @bot.command(name="bj", aliases=["blackjack"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2167,9 +2431,6 @@ async def blackjack(ctx, amount_str: str):
         embed = await view.embed_game()
         await ctx.send(embed=embed, view=view)
 
-# ==================================================
-# COMMAND: Mines
-# ==================================================
 @bot.command(name="mines")
 @economy_check()
 @gambling_cooldown_check()
@@ -2192,9 +2453,6 @@ async def mines_cmd(ctx, amount_str: str, mines: int = 5):
     embed.set_footer(text="Reveal tiles to increase multiplier. Must reveal at least 1 to cashout!")
     await ctx.send(embed=embed, view=view)
 
-# ==================================================
-# COMMAND: Crash
-# ==================================================
 @bot.command(name="crash")
 @economy_check()
 @gambling_cooldown_check()
@@ -2213,9 +2471,6 @@ async def crash(ctx, amount_str: str):
     view.message = msg
     await view.start_update_task()
 
-# ==================================================
-# COMMAND: Tower
-# ==================================================
 @bot.command(name="tower")
 @economy_check()
 @gambling_cooldown_check()
@@ -2234,9 +2489,6 @@ async def tower(ctx, amount_str: str):
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
 
-# ==================================================
-# COMMAND: Roulette
-# ==================================================
 @bot.command(name="roulette", aliases=["rl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2273,9 +2525,6 @@ async def roulette(ctx, amount_str: str, *, bet: str):
         await ctx.send(f"❌ The ball landed on **{number}** ({color}). You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: HighLow
-# ==================================================
 @bot.command(name="highlow", aliases=["hl"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2311,9 +2560,6 @@ async def highlow(ctx, amount_str: str, choice: str):
         await ctx.send(f"🃏 First: {cards[first]}, Second: {cards[second]}\n❌ You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Dice
-# ==================================================
 @bot.command(name="dice", aliases=["dc"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2336,9 +2582,6 @@ async def dice(ctx, amount_str: str, guess: int):
         await ctx.send(f"🎲 You rolled a **{roll}**. You guessed {guess}. Lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Horse Race
-# ==================================================
 @bot.command(name="horserace", aliases=["hrace"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2380,9 +2623,6 @@ async def horserace(ctx, amount_str: str, horse: str):
         await ctx.send(f"🏆 **Horse {winner} WINS!** 🏆\nYour horse {horse} lost. You lost {format_number(amount)}{emoji}.")
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: RPS
-# ==================================================
 @bot.command(name="rps")
 @economy_check()
 @gambling_cooldown_check()
@@ -2393,9 +2633,6 @@ async def rps(ctx, amount_str: str):
     view = RPSView(ctx, amount)
     await ctx.send("Choose your move:", view=view)
 
-# ==================================================
-# COMMAND: Plinko
-# ==================================================
 @bot.command(name="plinko")
 @economy_check()
 @gambling_cooldown_check()
@@ -2475,9 +2712,6 @@ async def plinko(ctx, amount_str: str, risk: str = "medium", rows: int = 12):
         await ctx.send(result_text)
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Baccarat
-# ==================================================
 @bot.command(name="baccarat", aliases=["bac"])
 @economy_check()
 @gambling_cooldown_check()
@@ -2516,9 +2750,6 @@ async def baccarat(ctx, amount_str: str, bet_on: str = None):
     await ctx.send(msg)
     await set_gambling_cooldown(ctx.author.id)
 
-# ==================================================
-# COMMAND: Bank Heist
-# ==================================================
 @bot.command(name="bankheist", aliases=["heist"])
 @economy_check()
 async def bank_heist(ctx):
@@ -2537,9 +2768,6 @@ async def bank_heist(ctx):
     msg = await ctx.send(embed=embed, view=view)
     view.message = msg
 
-# ==================================================
-# COMMAND: Lottery
-# ==================================================
 @bot.command(name="lottery", aliases=["lotto"])
 @economy_check()
 async def lottery(ctx):
@@ -2602,9 +2830,6 @@ async def my_tickets(ctx):
     embed.add_field(name="Current Jackpot", value=f"{format_number(jackpot)}{emoji}", inline=False)
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Create Shop
-# ==================================================
 @bot.command(name="createshop", aliases=["cs"])
 @economy_check()
 async def create_shop(ctx, *, name: str):
@@ -2818,9 +3043,6 @@ async def sell_business(ctx):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Sold for {format_number(value)}{emoji}.")
 
-# ==================================================
-# COMMAND: Date
-# ==================================================
 @bot.command(name="date")
 @economy_check()
 async def date(ctx, user: discord.User):
@@ -2834,9 +3056,6 @@ async def date(ctx, user: discord.User):
     await update_affection(user.id, gain)
     await ctx.send(f"Date with {user.mention}! +{gain} affection.")
 
-# ==================================================
-# COMMAND: Marry
-# ==================================================
 @bot.command(name="marry")
 @economy_check()
 async def marry(ctx, user: discord.User):
@@ -2860,9 +3079,6 @@ async def marry(ctx, user: discord.User):
     embed.add_field(name="Time", value="2 minutes")
     await ctx.send(f"{ctx.author.mention} proposed to {user.mention}!", embed=embed, view=view)
 
-# ==================================================
-# COMMAND: Divorce
-# ==================================================
 @bot.command(name="divorce")
 @economy_check()
 async def divorce(ctx):
@@ -2878,9 +3094,6 @@ async def divorce(ctx):
     s = await bot.fetch_user(spouse)
     await ctx.send(f"Divorced {s.mention}.")
 
-# ==================================================
-# COMMAND: Affection
-# ==================================================
 @bot.command(name="affection")
 @economy_check()
 async def affection(ctx, user: discord.User = None):
@@ -2900,9 +3113,6 @@ async def affection(ctx, user: discord.User = None):
     embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
     await ctx.send(embed=embed)
 
-# ==================================================
-# COMMAND: Gift
-# ==================================================
 @bot.command(name="gift")
 @economy_check()
 async def gift(ctx, user: discord.User, amount_str: str):
@@ -2927,9 +3137,6 @@ async def gift(ctx, user: discord.User, amount_str: str):
     if gain: msg += f" (+{format_number(gain)} affection)"
     await ctx.send(msg)
 
-# ==================================================
-# COMMAND: Adopt
-# ==================================================
 @bot.command(name="adopt")
 @economy_check()
 async def adopt(ctx, user: discord.User):
@@ -2950,9 +3157,6 @@ async def adopt(ctx, user: discord.User):
     embed.add_field(name="Time", value="2 minutes")
     await ctx.send(f"{ctx.author.mention} wants to adopt {user.mention}!", embed=embed, view=view)
 
-# ==================================================
-# COMMAND: Children
-# ==================================================
 @bot.command(name="children")
 @economy_check()
 async def children(ctx):
@@ -2966,9 +3170,6 @@ async def children(ctx):
         except: msg += f"- User {cid[0]}\n"
     await ctx.send(msg)
 
-# ==================================================
-# COMMAND: Family
-# ==================================================
 @bot.command(name="family")
 @economy_check()
 async def family(ctx):
@@ -2994,9 +3195,6 @@ async def family(ctx):
     else: msg += "\nChildren: None"
     await ctx.send(msg)
 
-# ==================================================
-# COMMAND: Leave Family
-# ==================================================
 @bot.command(name="leavefamily")
 @economy_check()
 async def leave_family(ctx):
@@ -3009,9 +3207,6 @@ async def leave_family(ctx):
         await db.commit()
     await ctx.send(f"You have left your family. No longer a child of <@{parent}>.")
 
-# ==================================================
-# COMMAND: Pending
-# ==================================================
 @bot.command(name="pending")
 @economy_check()
 async def pending(ctx):
@@ -3025,9 +3220,6 @@ async def pending(ctx):
         except: msg += f"`{rid}`: User {fid} - {rtype}\n"
     await ctx.send(msg)
 
-# ==================================================
-# COMMAND: Price Pool
-# ==================================================
 @bot.command(name="pricepool", aliases=["pp"])
 @economy_check()
 async def price_pool(ctx):
@@ -3121,9 +3313,6 @@ async def set_invite_reward(ctx, invites: int, amount_str: str):
     emoji = await get_setting(ctx.guild.id, "currency_emoji")
     await ctx.send(f"Invite reward set: {invites} invites = {format_number(amount)}{emoji}")
 
-# ==================================================
-# HELP COMMANDS
-# ==================================================
 class HelpPaginator(discord.ui.View):
     def __init__(self, ctx, pages):
         super().__init__(timeout=120)
@@ -3199,39 +3388,6 @@ class PageModal(discord.ui.Modal):
         except ValueError:
             await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
 
-class ServerPageModal(discord.ui.Modal):
-    def __init__(self, view, total_pages, build_embed, ctx):
-        super().__init__(title="Jump to Page", timeout=60)
-        self.view = view
-        self.total_pages = total_pages
-        self.build_embed = build_embed
-        self.ctx = ctx
-        self.page_input = discord.ui.TextInput(
-            label=f"Page number (1-{total_pages})",
-            placeholder="e.g. 2",
-            min_length=1,
-            max_length=2,
-            required=True
-        )
-        self.add_item(self.page_input)
-    async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user != self.ctx.author:
-            return await interaction.response.send_message("Not your menu!", ephemeral=True)
-        try:
-            page_num = int(self.page_input.value)
-            if page_num < 1 or page_num > self.total_pages:
-                return await interaction.response.send_message(
-                    f"❌ Please enter a number between 1 and {self.total_pages}.", 
-                    ephemeral=True
-                )
-            self.view.current_page = page_num
-            await interaction.response.edit_message(
-                embed=await self.build_embed(page_num), 
-                view=self.view
-            )
-        except ValueError:
-            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
-
 @bot.command(name="cmds")
 async def cmds_command(ctx):
     """Show all commands"""
@@ -3240,48 +3396,33 @@ async def cmds_command(ctx):
         pages = [
             discord.Embed(title="📊 Economy Commands", color=0x3498db).add_field(name="💼 Economy", value="`.bal [@user]` - Check balance\n`.dep all/half/1k` - Deposit money\n`.with all/half/1k` - Withdraw money\n`.pay @user all/half/1k` - Pay someone", inline=False).add_field(name="💵 Income", value="`.daily` - Claim daily reward\n`.work` - Work for money (5m)\n`.sleep` - Sleep for money (8h)\n`.crime` - Commit crime (15m, 30% fail)", inline=False).add_field(name="🔫 Crime", value="`.rob @user` - Rob someone (1h, up to 50%)\n`.bankheist` - Start bank heist (2-10 players)", inline=False).add_field(name="🏦 Bank", value="`.interest` - View bank rate (5% per 24h)\n`.security 1-8` - Buy protection (10M base)", inline=False),
             discord.Embed(title="💳 Loan Commands", color=0x9b59b6).add_field(name="💳 Loans", value="`.loan <amount>` - Take loan (max 50k)\n`.repay all/half/amount` - Repay loan\n`.loaninfo` - View loan details\n\n• 10% interest per hour\n• Max loan: 50,000 coins", inline=False),
-            discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="🎲 Classic Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.dice all/half/1k 1-6` - Dice (5x)\n`.rps all/half/1k` - Rock Paper Scissors\n`.highlow all/half/1k h/l` - High/Low (1.1x)", inline=False).add_field(name="🎰 Casino Games", value="`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack (2.5x)\n`.roulette all/half/1k <bet>` - Roulette\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)", inline=False).add_field(name="🎮 Mini Games", value="`.crash all/half/1k` - Crash (balanced odds)\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.wordle all/half/1k [easy/medium/hard]` - Wordle (5 tries)\n`.horserace all/half/1k A/B/C/D` - Horse race", inline=False),
-            discord.Embed(title="🏦 Bank Heist", color=0xe74c3c).add_field(name="🏦 Heist", value="`.bankheist` - Start bank heist\n\n• 2-10 players needed\n• 3 minute join timer\n• Success: 20% + 2%/member (max 40%)\n• Success: split 100k\n• Fail: split 50k fine\n• 24h cooldown", inline=False),
-            discord.Embed(title="🎟️ Lottery", color=0xf1c40f).add_field(name="🎟️ Lottery", value="`.lottery` - View lottery info\n`.buyticket <amount>` - Buy tickets (50k each)\n`.mytickets` - Check your tickets\n\n• More tickets = higher chance\n• Drawn every Sunday\n• Winner takes jackpot", inline=False),
-            discord.Embed(title="🏪 Shop & Business", color=0x2ecc71).add_field(name="🏪 Shop", value="`.cs <name>` - Create shop\n`.asi <price> <item>` - Add item\n`.rsi <item>` - Remove item\n`.ms` - View your shop\n`.vs @user` - Visit shop\n`.bfs @user <item>` - Buy item\n`.cls` - Toggle shop open/closed\n`.gm` - Global market", inline=False).add_field(name="🏢 Business", value="`.bb restaurant/casino/cafe` - Buy business\n`.biz` - Business info\n`.ub` - Upgrade business\n`.cp` - Collect profits\n`.db` - Daily bonus\n`.sb` - Sell business", inline=False),
-            discord.Embed(title="💕 Relationships", color=0xe91e63).add_field(name="💕 Relationships", value="`.date @user` - Date (500💰)\n`.marry @user` - Propose (5k💰)\n`.divorce` - Divorce (2.5k💰)\n`.affection [@user]` - Check affection\n`.gift @user all/half/1k` - Gift\n`.adopt @user` - Adopt (2k💰)\n`.children` - View children\n`.family` - Family tree\n`.leavefamily` - Leave family\n`.pending` - View requests\n`.topcouples` - Top couples", inline=False),
-            discord.Embed(title="📨 Invites", color=0x9b59b6).add_field(name="📨 Invite System", value="`.inv [@user]` - Check invite stats (with PFP)\n`.ci [uses] [age]` - Create invite link\n`.lb i` - Invite leaderboard\n`.lb money` - Money leaderboard\n`.lb xp` - XP leaderboard\n`.pp` - View invite reward info\n`.claim` - How to claim rewards", inline=False).add_field(name="📊 Your Stats", value="Use `.inv` to see:\n• 🟢 Regular joins\n• 🔴 Left\n• 🟡 Fake accounts\n• 📊 Total\n\nProfile picture included!", inline=False),
-            discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n\n• Earn XP by chatting\n• Level up every 100 XP per level²\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges\n\nComplete quests for bonus coins!", inline=False),
-            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.lb i` - Invite leaderboard\n`.lb money` - Money leaderboard\n`.lb xp` - XP leaderboard\n`.glb money` - Global richest\n`.glb xp` - Global top XP\n`.topcouples` - Top couples", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats (won/lost)\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
+            discord.Embed(title="🎰 Gambling Commands", color=0xf1c40f).add_field(name="🎲 Classic Games", value="`.cf all/half/1k [heads/tails]` - Coin flip (2x)\n`.dice all/half/1k 1-6` - Dice (5x)\n`.rps all/half/1k` - Rock Paper Scissors\n`.highlow all/half/1k h/l` - High/Low (1.1x)", inline=False).add_field(name="🎰 Casino Games", value="`.slots all/half/1k` - Slot machine\n`.bj all/half/1k` - Blackjack (2.5x)\n`.roulette all/half/1k <bet>` - Roulette\n`.baccarat all/half/1k player/banker/tie` - Baccarat (1.2x)", inline=False).add_field(name="🎮 Mini Games", value="`.crash all/half/1k` - Crash\n`.mines all/half/1k [1-19]` - Minesweeper\n`.tower all/half/1k` - Tower climb\n`.plinko all/half/1k [risk] [rows]` - Plinko\n`.wordle all/half/1k [easy/medium/hard]` - Wordle\n`.hbt all/half/1k [easy/medium/hard]` - Harder Blacktea\n`.horserace all/half/1k A/B/C/D` - Horse race", inline=False),
+            discord.Embed(title="📊 Progression", color=0x9b59b6).add_field(name="📈 Leveling", value="`.level` - Check your level & XP\n• Earn XP by chatting\n• Milestone rewards every 5 levels!", inline=False).add_field(name="📋 Quests", value="`.tasks` - View daily & weekly quests\n`.badges` - View your badges\n`.bs <b1> <b2> <b3>` - Select showcase badges", inline=False),
+            discord.Embed(title="📊 Leaderboards & Stats", color=0x9b59b6).add_field(name="🏆 Leaderboards", value="`.lb i` - Invite leaderboard\n`.lb money` - Money leaderboard\n`.lb xp` - XP leaderboard\n`.glb money` - Global richest\n`.glb xp` - Global top XP", inline=False).add_field(name="📊 Stats", value="`.stats` - Gambling stats\n`.inv [@user]` - Invite stats\n`.mytickets` - Lottery tickets", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
         view.message = msg
     except Exception as e:
         await ctx.send(f"❌ Error loading help menu: {e}")
-        print(f"Help error: {e}")
 
 @bot.command(name="ccmds")
 @owner_only()
 async def ccmds_command(ctx):
-    """Show owner commands"""
     try:
         pages = [
-            discord.Embed(title="👑 Owner Commands - Money", color=0xe74c3c).add_field(name="💰 Money Management", value="`.addmoney @user <amount>` - Add money to user\n`.removemoney @user all/half/amount` - Remove money\n`.setmoney @user <amount>` - Set wallet balance\n`.addbank @user <amount>` - Add to bank\n`.removebank @user all/half/amount` - Remove from bank", inline=False).add_field(name="🔧 Utilities", value="`.avt @user` - Toggle tax exemption\n`.protect @user` - Protect from robs\n`.unprotect @user` - Remove protection\n`.sst @user` - Reset rob cooldown", inline=False),
-            discord.Embed(title="👑 Owner Commands - Users", color=0xe74c3c).add_field(name="👥 User Management", value="`.blacklist @user` - Blacklist user\n`.whitelist @user` - Remove blacklist\n`.addaffection @user <amount>` - Add affection\n`.setaffection @user <amount>` - Set affection\n`.addinvites @user <amount>` - Add invites", inline=False).add_field(name="📢 Other", value="`.rewardlast <amount> [count]` - Reward recent chatters\n`.rewardlasteveryone <amount> [count]` - Reward all servers\n`.economywipe` - Wipe all money\n`.logs [limit]` - View action logs", inline=False),
-            discord.Embed(title="👑 Owner Commands - Settings", color=0xe74c3c).add_field(name="⚙️ Server Settings", value="`.toggleeconomy` - Enable/disable economy\n`.togglerob` - Enable/disable robbery\n`.togglegambling` - Enable/disable gambling\n`.setdailyamount <amount>` - Set daily reward\n`.setcurrency <emoji>` - Set currency emoji\n`.setinvitereward <invites> <amount>` - Set invite reward\n`.setlotteryjackpot <amount>` - Set lottery jackpot", inline=False),
-            discord.Embed(title="👑 Owner Commands - Bot", color=0xe74c3c).add_field(name="🤖 Bot Management", value="`.addowner @user/ID` - Add bot owner\n`.removeowner @user/ID` - Remove owner\n`.ownerlist` - List all owners\n`.servers` - List all servers\n`.ann <message>` - Announce to all servers", inline=False).add_field(name="🎟️ Lottery Management", value="`.forcedraw` - Force lottery draw\n`.setlotteryjackpot <amount>` - Set jackpot", inline=False),
+            discord.Embed(title="👑 Owner Commands", color=0xe74c3c).add_field(name="💰 Money", value="`.addmoney` `.removemoney` `.setmoney` `.addbank` `.removebank`", inline=False).add_field(name="⚙️ Settings", value="`.toggleeconomy` `.togglerob` `.togglegambling` `.setdailyamount` `.setcurrency`", inline=False).add_field(name="👥 Users", value="`.blacklist` `.whitelist` `.protect` `.unprotect` `.addowner` `.removeowner`", inline=False),
         ]
         view = HelpPaginator(ctx, pages)
         msg = await ctx.send(embed=pages[0], view=view)
         view.message = msg
     except Exception as e:
-        await ctx.send(f"❌ Error loading owner help: {e}")
-        print(f"Owner help error: {e}")
+        await ctx.send(f"❌ Error: {e}")
 
 @bot.command(name="commands", aliases=["commandlist"])
 async def commands_cmd(ctx):
-    """Alias for cmds"""
     await cmds_command(ctx)
 
-# ==================================================
-# OWNER COMMANDS
-# ==================================================
 @bot.command(name="addmoney")
 @owner_only()
 async def addmoney(ctx, user: discord.User, amount_str: str):
@@ -3380,14 +3521,12 @@ async def avt(ctx, user: discord.User):
 async def addaffection(ctx, user: discord.User, amount: int):
     await update_affection(user.id, amount)
     await ctx.send(f"Added {amount} affection to {user.mention}.")
-    await log_action(ctx.author.id, "AddAffection", f"{user.id} +{amount}")
 
 @bot.command(name="setaffection")
 @owner_only()
 async def setaffection(ctx, user: discord.User, amount: int):
     await set_affection(user.id, amount)
     await ctx.send(f"Set {user.mention}'s affection to {amount}.")
-    await log_action(ctx.author.id, "SetAffection", f"{user.id} ={amount}")
 
 @bot.command(name="rewardlast")
 @owner_only()
@@ -3447,7 +3586,7 @@ async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
             seen.add(uid)
     eligible_users = eligible_users[:count]
     if not eligible_users:
-        return await ctx.send("❌ No eligible users found! Users must have sent a message within the last 5 minutes on any server.")
+        return await ctx.send("❌ No eligible users found!")
     rewarded_count = 0
     async with aiosqlite.connect("hakari.db") as db:
         for uid in eligible_users:
@@ -3465,18 +3604,16 @@ async def reward_last_everyone(ctx, amount_str: str, count: int = 10):
     if len(eligible_users) > 5:
         mentions += f" and {len(eligible_users) - 5} more..."
     embed = discord.Embed(title="🌍 Global Reward", color=0x2ecc71)
-    embed.description = f"Rewarded **{rewarded_count}** recent chatters across all servers with **{format_number(amt)}{emoji}** each!"
+    embed.description = f"Rewarded **{rewarded_count}** users with **{format_number(amt)}{emoji}** each!"
     embed.add_field(name="Recipients", value=mentions, inline=False)
-    embed.set_footer(text=f"Only users active within last 5 minutes were eligible")
     await ctx.send(embed=embed)
-    await log_action(ctx.author.id, "RewardLastEveryone", f"Rewarded {rewarded_count} users with {amt} each across all servers")
 
 @bot.command(name="addowner")
 @owner_only()
 @main_owner_only()
 async def addowner(ctx, target: str):
     uid = await resolve_user_id(target)
-    if uid is None: return await ctx.send("Invalid user. Use a ping (@user) or a numeric ID.")
+    if uid is None: return await ctx.send("Invalid user.")
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("INSERT OR IGNORE INTO owners (user_id, is_main) VALUES (?,0)", (uid,)); await db.commit()
     await ctx.send(f"Added <@{uid}> as owner.")
@@ -3486,7 +3623,7 @@ async def addowner(ctx, target: str):
 @main_owner_only()
 async def removeowner(ctx, target: str):
     uid = await resolve_user_id(target)
-    if uid is None: return await ctx.send("Invalid user. Use a ping (@user) or a numeric ID.")
+    if uid is None: return await ctx.send("Invalid user.")
     if uid in MAIN_OWNER_IDS: return await ctx.send("Cannot remove a main owner.")
     async with aiosqlite.connect("hakari.db") as db:
         await db.execute("DELETE FROM owners WHERE user_id=?", (uid,)); await db.commit()
@@ -3602,156 +3739,26 @@ async def logs(ctx, limit: int = 10):
 @bot.command(name="ann")
 @main_owner_only()
 async def announce(ctx, *, message: str):
-    """Announce to all servers - sends to the most active channel"""
     sent = 0
     for guild in bot.guilds:
         try:
-            best_channel = None
-            highest_messages = 0
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    try:
-                        msg_count = 0
-                        async for _ in channel.history(limit=50):
-                            msg_count += 1
-                        if msg_count > highest_messages:
-                            highest_messages = msg_count
-                            best_channel = channel
-                    except:
-                        pass
-            if not best_channel:
-                best_channel = guild.system_channel or guild.text_channels[0]
+            best_channel = guild.system_channel or guild.text_channels[0]
             if best_channel and best_channel.permissions_for(guild.me).send_messages:
                 embed = discord.Embed(description=message, color=0xf1c40f)
                 embed.set_author(name=f"{ctx.author.name} - Owner Of Bot", icon_url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
-                embed.set_footer(text=f"📢 Official Announcement • {datetime.now(timezone.utc).strftime('%b %d, %Y')}")
                 await best_channel.send(embed=embed)
                 sent += 1
         except:
             pass
-    embed = discord.Embed(title="📢 Announcement Sent", color=0x2ecc71)
-    embed.description = f"Message sent to **{sent}/{len(bot.guilds)}** servers"
-    embed.add_field(name="Content", value=message[:1024] if len(message) > 1024 else message, inline=False)
-    embed.set_footer(text="Sent to the most active channel in each server")
-    await ctx.send(embed=embed)
+    await ctx.send(f"📢 Announcement sent to **{sent}/{len(bot.guilds)}** servers")
 
 @bot.command(name="servers")
 @main_owner_only()
 async def servers_list(ctx):
-    """Show all servers the bot is in, sorted by member count"""
-    try:
-        guilds_info = []
-        for guild in bot.guilds:
-            bot_count = sum(1 for m in guild.members if m.bot)
-            human_count = guild.member_count - bot_count
-            owner = guild.owner
-            owner_name = str(owner) if owner else "Unknown"
-            boost_level = guild.premium_tier
-            boost_count = guild.premium_subscription_count
-            text_channels = len(guild.text_channels)
-            voice_channels = len(guild.voice_channels)
-            created_at = guild.created_at.strftime("%b %d, %Y")
-            guilds_info.append({
-                'guild': guild,
-                'name': guild.name,
-                'id': guild.id,
-                'members': guild.member_count,
-                'humans': human_count,
-                'bots': bot_count,
-                'owner': owner_name,
-                'owner_id': guild.owner_id,
-                'boost_level': boost_level,
-                'boost_count': boost_count,
-                'text_channels': text_channels,
-                'voice_channels': voice_channels,
-                'total_channels': text_channels + voice_channels,
-                'created_at': created_at,
-                'icon_url': guild.icon.url if guild.icon else None,
-                'description': guild.description or "No description",
-                'features': guild.features,
-                'vanity': guild.vanity_url_code,
-            })
-        guilds_info.sort(key=lambda x: x['members'], reverse=True)
-        total_members = sum(g['members'] for g in guilds_info)
-        total_humans = sum(g['humans'] for g in guilds_info)
-        total_bots = sum(g['bots'] for g in guilds_info)
-        per_page = 5
-        total_pages = max(1, (len(guilds_info) + per_page - 1) // per_page)
-        current_page = 1
-        async def build_embed(page):
-            start = (page - 1) * per_page
-            end = start + per_page
-            page_guilds = guilds_info[start:end]
-            embed = discord.Embed(title=f"🌐 Bot Servers ({len(bot.guilds)} total)", color=0x3498db)
-            embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else bot.user.default_avatar.url)
-            desc = ""
-            for i, ginfo in enumerate(page_guilds, start + 1):
-                boost_emoji = {0: "⚪", 1: "🌱", 2: "🔮", 3: "👑"}.get(ginfo['boost_level'], "⚪")
-                verified = "✅" if "VERIFIED" in ginfo['features'] else ""
-                partnered = "🤝" if "PARTNERED" in ginfo['features'] else ""
-                desc += f"**{i}.** `{ginfo['name']}`\n"
-                desc += f"👑 Owner: `{ginfo['owner']}`\n"
-                desc += f"👥 Members: **{ginfo['members']}** (👤 {ginfo['humans']} | 🤖 {ginfo['bots']})\n"
-                desc += f"📺 Channels: {ginfo['total_channels']} (💬 {ginfo['text_channels']} | 🔊 {ginfo['voice_channels']})\n"
-                desc += f"{boost_emoji} Boost: Level {ginfo['boost_level']} ({ginfo['boost_count']} boosts) {verified}{partnered}\n"
-                desc += f"📅 Created: {ginfo['created_at']}\n"
-                desc += f"🆔 ID: `{ginfo['id']}`\n"
-                if ginfo['vanity']:
-                    desc += f"🔗 Vanity: `{ginfo['vanity']}`\n"
-                if ginfo['description'] != "No description":
-                    desc += f"📝 {ginfo['description'][:100]}\n"
-                desc += "\n"
-            embed.description = desc
-            embed.add_field(name="📊 Summary", value=f"**Servers:** {len(bot.guilds)}\n**Total Members:** {format_number(total_members)}\n**Humans:** {format_number(total_humans)}\n**Bots:** {format_number(total_bots)}\n**Avg Members:** {format_number(total_members // len(bot.guilds)) if bot.guilds else 0}", inline=True)
-            if bot.shard_count:
-                embed.add_field(name="🔧 Shard Info", value=f"**Shards:** {bot.shard_count}\n**Latency:** {round(bot.latency * 1000)}ms", inline=True)
-            embed.set_footer(text=f"Page {page}/{total_pages} • Sorted by members • {len(guilds_info)} servers", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            embed.timestamp = datetime.now(timezone.utc)
-            return embed
-        embed = await build_embed(current_page)
-        if total_pages == 1:
-            return await ctx.send(embed=embed)
-        class ServerLeaderboardView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=120)
-                self.current_page = 1
-                self.message = None
-            @discord.ui.button(label="◀", style=discord.ButtonStyle.primary)
-            async def prev(self, inter: discord.Interaction, btn: discord.ui.Button):
-                if inter.user != ctx.author:
-                    return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page = (self.current_page - 1) % total_pages
-                if self.current_page == 0:
-                    self.current_page = total_pages
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            @discord.ui.button(label="📄 Jump", style=discord.ButtonStyle.secondary)
-            async def jump(self, inter: discord.Interaction, btn: discord.ui.Button):
-                if inter.user != ctx.author:
-                    return await inter.response.send_message("Not your menu!", ephemeral=True)
-                modal = ServerPageModal(self, total_pages, build_embed, ctx)
-                await inter.response.send_modal(modal)
-            @discord.ui.button(label="▶", style=discord.ButtonStyle.primary)
-            async def nxt(self, inter: discord.Interaction, btn: discord.ui.Button):
-                if inter.user != ctx.author:
-                    return await inter.response.send_message("Not your menu!", ephemeral=True)
-                self.current_page = (self.current_page + 1) % total_pages
-                if self.current_page == 0:
-                    self.current_page = 1
-                await inter.response.edit_message(embed=await build_embed(self.current_page), view=self)
-            async def on_timeout(self):
-                try:
-                    for child in self.children:
-                        child.disabled = True
-                    if self.message:
-                        await self.message.edit(view=self)
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-        view = ServerLeaderboardView()
-        msg = await ctx.send(embed=embed, view=view)
-        view.message = msg
-    except Exception as e:
-        await ctx.send(f"❌ Error loading server list: {e}")
-        print(f"Server list error: {e}")
+    guilds = sorted(bot.guilds, key=lambda g: g.member_count, reverse=True)
+    desc = "\n".join(f"**{g.name}** - {g.member_count} members" for g in guilds[:20])
+    embed = discord.Embed(title=f"🌐 Bot Servers ({len(bot.guilds)})", description=desc, color=0x3498db)
+    await ctx.send(embed=embed)
 
 @bot.command(name="setlotteryjackpot", aliases=["slj"])
 @owner_only()
@@ -3842,6 +3849,7 @@ async def on_message(message):
         await asyncio.sleep(5)
         try: await lvl_msg.delete()
         except: pass
+    await on_hbt_message(message)
     await bot.process_commands(message)
 
 @bot.event
